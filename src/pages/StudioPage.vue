@@ -1,49 +1,92 @@
 <template>
   <q-page class="studio q-pa-md">
-    <div class="row q-col-gutter-md">
+    <div class="row q-col-gutter-md studio-grid">
       <div class="col-12 col-md-8">
         <div class="mt-panel q-pa-md">
-          <div class="row items-center q-mb-md q-gutter-sm">
-            <q-btn-toggle
-              v-model="mode"
-              toggle-color="orange-8"
-              :options="[
-                { label: 'Clip $0.04', value: 'clip' },
-                { label: 'Full $0.08', value: 'full' },
-              ]"
-            />
-            <q-space />
-            <q-btn flat dense color="grey-4" label="Reset" @click="patternStore.resetPattern()" />
-            <q-btn flat dense color="grey-4" label="Save pattern" :loading="saving" @click="onSave" />
-            <q-btn-dropdown flat dense color="grey-4" label="Load">
-              <q-list dense dark>
-                <q-item v-if="!savedPatterns.length">
-                  <q-item-section>No saved patterns</q-item-section>
-                </q-item>
-                <q-item
-                  v-for="p in savedPatterns"
-                  :key="p.id"
-                  clickable
-                  v-close-popup
-                  @click="patternStore.loadPattern(p)"
-                >
-                  <q-item-section>{{ p.name }}</q-item-section>
-                </q-item>
-              </q-list>
-            </q-btn-dropdown>
-            <q-btn
-              color="orange-8"
-              unelevated
-              :loading="generating"
-              :disable="hardBlocked"
-              :label="generateLabel"
-              @click="onGenerate"
-            />
+          <div class="studio-toolbar q-mb-md">
+            <div class="studio-toolbar__primary row items-center no-wrap">
+              <q-select
+                v-model="mode"
+                :options="modeOptions"
+                dense
+                outlined
+                dark
+                emit-value
+                map-options
+                options-dense
+                class="studio-mode"
+                popup-content-class="bg-dark"
+              >
+                <template #option="scope">
+                  <q-item v-bind="scope.itemProps" dense>
+                    <q-item-section>
+                      <q-item-label>{{ scope.opt.title }}</q-item-label>
+                      <q-item-label caption>{{ scope.opt.caption }}</q-item-label>
+                    </q-item-section>
+                    <q-item-section side>
+                      <q-item-label class="text-primary">{{ scope.opt.price }}</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                </template>
+              </q-select>
+              <div class="studio-song-meta text-caption text-grey-5 ellipsis">
+                {{ songLabel }}
+                <span v-if="isDirty" class="text-primary"> · unsaved</span>
+              </div>
+              <q-space />
+              <q-btn
+                color="primary"
+                text-color="dark"
+                unelevated
+                no-wrap
+                :loading="generating"
+                :disable="hardBlocked"
+                :label="generateLabel"
+                @click="onGenerate"
+              />
+            </div>
+            <div class="studio-toolbar__files row items-center">
+              <q-btn flat dense color="grey-4" label="New song" @click="onNewSong" />
+              <q-btn
+                flat
+                dense
+                color="grey-4"
+                :label="isDirty ? 'Save*' : 'Save'"
+                :loading="saving"
+                @click="onSave"
+              />
+              <q-btn flat dense color="grey-5" label="Save as…" :disable="saving" @click="onSaveAs" />
+              <q-btn-dropdown flat dense color="grey-4" label="Open">
+                <q-list dense dark style="min-width: 220px">
+                  <q-item v-if="!songs.length">
+                    <q-item-section>No saved songs</q-item-section>
+                  </q-item>
+                  <q-item
+                    v-for="s in songs"
+                    :key="s.id"
+                    clickable
+                    v-close-popup
+                    :active="activeSong?.id === s.id"
+                    @click="onOpen(s.id)"
+                  >
+                    <q-item-section>
+                      <q-item-label>{{ s.name }}</q-item-label>
+                      <q-item-label caption>{{ formatTime(s.updatedAt) }}</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                </q-list>
+              </q-btn-dropdown>
+            </div>
           </div>
 
           <q-banner v-if="!keyPresent" class="bg-red-10 text-white q-mb-md" dense>
-            No backend configured. Set <code>GOOGLE_CLOUD_PROJECT</code> (Vertex) and/or
-            <code>GOOGLE_API_KEY</code> in <code>.env.local</code>, then restart Electron.
+            <div class="row items-center">
+              <div class="col">
+                No backend configured. Open Settings to add a Gemini API key or Vertex project
+                (or set credentials in <code>.env.local</code>).
+              </div>
+              <q-btn flat dense color="white" label="Settings" class="q-ml-sm" @click="ui.openSettings()" />
+            </div>
           </q-banner>
           <q-banner v-else-if="hardBlocked" class="bg-red-9 text-white q-mb-md" dense>
             Budget hard limit reached. Raise limits before generating.
@@ -60,10 +103,10 @@
         <AudioPlayer />
         <div class="mt-panel q-pa-md q-mt-md">
           <div class="mt-label q-mb-sm">Next call</div>
-          <div class="text-h6 text-orange-5">${{ nextCost.toFixed(2) }} · {{ mode }}</div>
+          <div class="text-h6 text-primary">${{ nextCost.toFixed(2) }} · {{ mode }}</div>
           <div class="text-caption text-grey-5 q-mt-xs">
             Clip = 30s preview. Full = lyria-3.5 song. Flash lyrics/refine billed separately by
-            tokens.
+            tokens. Each Generate saves a recallable version of this song.
           </div>
         </div>
       </div>
@@ -80,15 +123,17 @@ import BandTabs from '@/components/BandTabs.vue';
 import { useBudgetStore } from '@/stores/budget';
 import { useLibraryStore } from '@/stores/library';
 import { usePatternStore } from '@/stores/pattern';
+import { useUiStore } from '@/stores/ui';
 
 const $q = useQuasar();
 const patternStore = usePatternStore();
 const budgetStore = useBudgetStore();
 const libraryStore = useLibraryStore();
+const ui = useUiStore();
 
 const { pattern, compiledPrompt, mode } = storeToRefs(patternStore);
 const { keyPresent } = storeToRefs(budgetStore);
-const { savedPatterns, generating } = storeToRefs(libraryStore);
+const { songs, activeSong, generating, isDirty } = storeToRefs(libraryStore);
 
 const saving = ref(false);
 
@@ -96,23 +141,109 @@ const nextCost = computed(() => budgetStore.nextCost(mode.value));
 const gate = computed(() => budgetStore.gateFor(mode.value));
 const hardBlocked = computed(() => gate.value.gate === 'hard');
 const softWarned = computed(() => gate.value.gate === 'soft');
-const generateLabel = computed(
-  () => `Generate ${mode.value === 'clip' ? 'Clip' : 'Full'} $${nextCost.value.toFixed(2)}`,
-);
+const generateLabel = computed(() => `Generate · $${nextCost.value.toFixed(2)}`);
+const songLabel = computed(() => activeSong.value?.name || pattern.value.name || 'Untitled song');
+
+const modeOptions = computed(() => [
+  {
+    label: `Clip · $${budgetStore.nextCost('clip').toFixed(2)}`,
+    value: 'clip' as const,
+    title: 'Clip',
+    caption: '30s preview',
+    price: `$${budgetStore.nextCost('clip').toFixed(2)}`,
+  },
+  {
+    label: `Full · $${budgetStore.nextCost('full').toFixed(2)}`,
+    value: 'full' as const,
+    title: 'Full',
+    caption: 'Complete song',
+    price: `$${budgetStore.nextCost('full').toFixed(2)}`,
+  },
+]);
 
 onMounted(async () => {
-  await Promise.all([budgetStore.refresh(), libraryStore.refresh()]);
+  await budgetStore.refresh();
+  const restored = await libraryStore.restoreSession();
+  if (!restored) {
+    await Promise.all([libraryStore.refreshSongs(), patternStore.bootstrapFromSettings()]);
+    libraryStore.markClean(patternStore.pattern);
+  } else {
+    await libraryStore.refreshSongs();
+  }
 });
+
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+async function onNewSong() {
+  if (isDirty.value) {
+    $q.dialog({
+      title: 'Discard unsaved changes?',
+      message: 'Start a new song without saving the current one?',
+      cancel: true,
+      persistent: true,
+      ok: { label: 'New song', color: 'primary' },
+    }).onOk(() => {
+      void libraryStore.newSong();
+    });
+    return;
+  }
+  await libraryStore.newSong();
+}
 
 async function onSave() {
   saving.value = true;
   try {
-    await libraryStore.saveCurrentPattern(pattern.value);
-    $q.notify({ type: 'positive', message: 'Pattern saved' });
+    await libraryStore.saveSong();
+    $q.notify({ type: 'positive', message: 'Song saved' });
   } catch (e) {
     $q.notify({ type: 'negative', message: e instanceof Error ? e.message : String(e) });
   } finally {
     saving.value = false;
+  }
+}
+
+function onSaveAs() {
+  $q.dialog({
+    title: 'Save song as',
+    prompt: {
+      model: pattern.value.name || 'Untitled Song',
+      type: 'text',
+      label: 'Song name',
+    },
+    cancel: true,
+    persistent: true,
+    ok: { label: 'Save', color: 'primary' },
+  }).onOk((name: string) => {
+    void (async () => {
+      saving.value = true;
+      try {
+        await libraryStore.saveSongAs(name);
+        $q.notify({ type: 'positive', message: 'Song saved as new project' });
+      } catch (e) {
+        $q.notify({ type: 'negative', message: e instanceof Error ? e.message : String(e) });
+      } finally {
+        saving.value = false;
+      }
+    })();
+  });
+}
+
+async function onOpen(id: string) {
+  try {
+    const song = await libraryStore.openSong(id);
+    if (!song) {
+      $q.notify({ type: 'warning', message: 'Song not found' });
+      return;
+    }
+    $q.notify({ type: 'positive', message: `Opened ${song.name}` });
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e instanceof Error ? e.message : String(e) });
   }
 }
 
@@ -138,7 +269,7 @@ async function onGenerate() {
     }`,
     cancel: true,
     persistent: true,
-    ok: { label: `Spend $${nextCost.value.toFixed(2)}`, color: 'orange-8' },
+    ok: { label: `Spend $${nextCost.value.toFixed(2)}`, color: 'primary' },
   }).onOk(() => {
     void (async () => {
       try {
@@ -148,12 +279,21 @@ async function onGenerate() {
           mode: mode.value,
         });
         budgetStore.applyBudget(result.budget);
-        $q.notify({
-          type: 'positive',
-          message: result.reused
-            ? 'Reused previous generation (no new charge)'
-            : `Generated ${mode.value} for $${result.generation.costUsd.toFixed(2)}`,
-        });
+        if (result.generation.lyricsMismatch) {
+          $q.notify({
+            type: 'warning',
+            timeout: 10000,
+            message:
+              'Lyria heavily rewrote your lyrics (beyond a light adaptation). Audio is kept — check the returned transcript, tweak the sheet/theme, or accept this take.',
+          });
+        } else {
+          $q.notify({
+            type: 'positive',
+            message: result.reused
+              ? 'Reused previous version (no new charge)'
+              : `Saved version · ${mode.value} · $${result.generation.costUsd.toFixed(2)}`,
+          });
+        }
       } catch (e) {
         await budgetStore.refresh();
         $q.notify({ type: 'negative', message: e instanceof Error ? e.message : String(e) });
@@ -167,5 +307,51 @@ async function onGenerate() {
 .studio {
   max-width: 1400px;
   margin: 0 auto;
+  overflow-x: hidden;
+}
+
+.studio-grid {
+  max-width: 100%;
+}
+
+/* Flex columns default to min-width:auto and can grow past the panel from wide toolbars/tabs. */
+.studio-grid > [class*='col-'] {
+  min-width: 0;
+}
+
+.studio-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.studio-toolbar__primary {
+  gap: 0.75rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.studio-mode {
+  flex: 0 0 auto;
+  width: 9.5rem;
+}
+
+.studio-mode :deep(.q-field__control),
+.studio-mode :deep(.q-field__native) {
+  min-height: 36px;
+}
+
+.studio-song-meta {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.studio-toolbar__files {
+  gap: 0.15rem;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 </style>

@@ -2,8 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app, protocol } from 'electron';
 import type { GenerationRecord } from '../../src/models/generation';
-import type { LyriaMode } from '../../src/models/pattern';
-import type { Pattern } from '../../src/models/pattern';
+import { normalizePattern, type LyriaMode, type Pattern } from '../../src/models/pattern';
 
 const SCHEMA = 'mytunes';
 
@@ -17,20 +16,29 @@ function indexPath(): string {
   return path.join(generationsDir(), 'index.json');
 }
 
-function patternsDir(): string {
-  const dir = path.join(app.getPath('userData'), 'patterns');
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+export function loadGenerations(filter?: { songId?: string }): GenerationRecord[] {
+  const file = indexPath();
+  let list: GenerationRecord[] = [];
+  if (fs.existsSync(file)) {
+    try {
+      list = JSON.parse(fs.readFileSync(file, 'utf8')) as GenerationRecord[];
+    } catch {
+      list = [];
+    }
+  }
+  if (filter?.songId) {
+    list = list.filter(
+      (g) => g.songId === filter.songId || (!g.songId && g.patternId === filter.songId),
+    );
+  }
+  return list.map(normalizeGeneration);
 }
 
-export function loadGenerations(): GenerationRecord[] {
-  const file = indexPath();
-  if (!fs.existsSync(file)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8')) as GenerationRecord[];
-  } catch {
-    return [];
+function normalizeGeneration(g: GenerationRecord): GenerationRecord {
+  if (!g.audioFileUrl) {
+    g.audioFileUrl = `${SCHEMA}://generation/${g.id}`;
   }
+  return g;
 }
 
 function saveIndex(records: GenerationRecord[]): void {
@@ -40,11 +48,32 @@ function saveIndex(records: GenerationRecord[]): void {
 export function findGenerationByHash(
   promptHash: string,
   mode: LyriaMode,
+  songId?: string,
 ): GenerationRecord | undefined {
-  return loadGenerations().find((g) => g.promptHash === promptHash && g.mode === mode);
+  return loadGenerations(songId ? { songId } : undefined).find(
+    (g) => g.promptHash === promptHash && g.mode === mode,
+  );
+}
+
+export function findGenerationById(id: string): GenerationRecord | undefined {
+  return loadGenerations().find((g) => g.id === id);
+}
+
+export function patchGeneration(
+  id: string,
+  patch: Partial<Pick<GenerationRecord, 'lyricsText' | 'arrangementNotes' | 'lyricsMatchScore' | 'lyricsMismatch'>>,
+): GenerationRecord | null {
+  const list = loadGenerations();
+  const idx = list.findIndex((g) => g.id === id);
+  if (idx < 0) return null;
+  const next = { ...list[idx]!, ...patch };
+  list[idx] = next;
+  saveIndex(list);
+  return next;
 }
 
 export function saveGeneration(input: {
+  songId: string;
   pattern: Pattern;
   mode: LyriaMode;
   model: string;
@@ -52,6 +81,9 @@ export function saveGeneration(input: {
   promptHash: string;
   compiledPrompt: string;
   lyricsText?: string;
+  arrangementNotes?: string;
+  lyricsMatchScore?: number;
+  lyricsMismatch?: boolean;
   audioBase64: string;
 }): GenerationRecord {
   const id = crypto.randomUUID();
@@ -61,6 +93,7 @@ export function saveGeneration(input: {
   const record: GenerationRecord = {
     id,
     createdAt: new Date().toISOString(),
+    songId: input.songId,
     patternId: input.pattern.id,
     patternName: input.pattern.name,
     mode: input.mode,
@@ -68,11 +101,21 @@ export function saveGeneration(input: {
     costUsd: input.costUsd,
     promptHash: input.promptHash,
     compiledPrompt: input.compiledPrompt,
+    patternSnapshot: structuredClone(input.pattern),
     audioPath,
     audioFileUrl: `${SCHEMA}://generation/${id}`,
   };
   if (input.lyricsText) {
     record.lyricsText = input.lyricsText;
+  }
+  if (input.arrangementNotes) {
+    record.arrangementNotes = input.arrangementNotes;
+  }
+  if (input.lyricsMatchScore != null) {
+    record.lyricsMatchScore = input.lyricsMatchScore;
+  }
+  if (input.lyricsMismatch != null) {
+    record.lyricsMismatch = input.lyricsMismatch;
   }
 
   const list = loadGenerations();
@@ -82,7 +125,7 @@ export function saveGeneration(input: {
 }
 
 export function getGenerationAudioPath(id: string): string | null {
-  const rec = loadGenerations().find((g) => g.id === id);
+  const rec = findGenerationById(id);
   if (!rec) return null;
   return fs.existsSync(rec.audioPath) ? rec.audioPath : null;
 }
@@ -105,13 +148,21 @@ export function registerAudioProtocol(): void {
   });
 }
 
+/** @deprecated Prefer songStore — kept for migration helpers / old IPC. */
+function patternsDir(): string {
+  const dir = path.join(app.getPath('userData'), 'patterns');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 export function listPatterns(): Pattern[] {
   const dir = patternsDir();
+  if (!fs.existsSync(dir)) return [];
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
   const patterns: Pattern[] = [];
   for (const file of files) {
     try {
-      patterns.push(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) as Pattern);
+      patterns.push(normalizePattern(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) as Pattern));
     } catch {
       /* skip */
     }
@@ -120,6 +171,7 @@ export function listPatterns(): Pattern[] {
 }
 
 export function savePattern(pattern: Pattern): Pattern {
+  normalizePattern(pattern);
   const file = path.join(patternsDir(), `${pattern.id}.json`);
   fs.writeFileSync(file, JSON.stringify(pattern, null, 2), 'utf8');
   return pattern;
@@ -133,5 +185,5 @@ export function deletePattern(id: string): void {
 export function loadPattern(id: string): Pattern | null {
   const file = path.join(patternsDir(), `${id}.json`);
   if (!fs.existsSync(file)) return null;
-  return JSON.parse(fs.readFileSync(file, 'utf8')) as Pattern;
+  return normalizePattern(JSON.parse(fs.readFileSync(file, 'utf8')) as Pattern);
 }

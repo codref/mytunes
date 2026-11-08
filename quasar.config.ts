@@ -80,9 +80,9 @@ export default defineConfig((/* ctx */) => {
       config: {
         dark: true,
         brand: {
-          primary: '#c45c26',
-          secondary: '#d4a04a',
-          accent: '#c45c26',
+          primary: '#e8a045',
+          secondary: '#f0c078',
+          accent: '#e8a045',
           dark: '#1a1612',
           'dark-page': '#1a1612',
         },

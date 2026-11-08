@@ -2,7 +2,7 @@
   <div class="mt-knob-row">
     <q-toggle
       :model-value="slot.enabled"
-      color="orange-8"
+      color="primary"
       :label="`${label} enabled`"
       @update:model-value="(v) => patternStore.setSlotEnabled(slotId, v)"
     />
@@ -14,7 +14,7 @@
           :model-value="value"
           :min="0"
           :max="100"
-          color="orange-8"
+          color="primary"
           :disable="!slot.enabled"
           label
           @update:model-value="(v) => patternStore.setSlotKnob(slotId, key, Number(v))"

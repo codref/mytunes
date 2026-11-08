@@ -3,11 +3,12 @@
     <div class="row items-center justify-between">
       <div class="mt-label">Compiled Lyria prompt</div>
       <div class="row q-gutter-sm">
-        <q-btn flat dense color="orange-8" label="Recompile" @click="patternStore.recompileLocal()" />
+        <q-btn flat dense color="primary" label="Recompile" @click="patternStore.recompileLocal()" />
         <q-btn
           unelevated
           dense
-          color="orange-9"
+          color="primary"
+          text-color="dark"
           :loading="busy"
           label="Refine with Flash"
           @click="onRefine"

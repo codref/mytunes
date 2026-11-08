@@ -5,10 +5,12 @@
   --mt-line: #3d342a;
   --mt-text: #f0e6d8;
   --mt-muted: #a89880;
-  --mt-accent: #c45c26;
-  --mt-accent-2: #d4a04a;
+  /* Amber reads clearly on the brown studio background; dark ink on fills. */
+  --mt-accent: #e8a045;
+  --mt-accent-2: #f0c078;
+  --mt-accent-ink: #1a1612;
   --mt-ok: #6a9a5b;
-  --mt-warn: #d4a04a;
+  --mt-warn: #e8a045;
   --mt-danger: #c44b3c;
   --mt-font-display: 'Segoe UI', 'Trebuchet MS', sans-serif;
   --mt-font-body: 'Segoe UI', 'Helvetica Neue', sans-serif;
@@ -21,6 +23,35 @@ body,
   background: radial-gradient(ellipse at top left, #2a2218 0%, var(--mt-bg) 55%, #100e0c 100%);
   color: var(--mt-text);
   font-family: var(--mt-font-body);
+  overflow-x: hidden;
+}
+
+/* Thin, dark scrollbars — avoid chunky OS chrome on panels and chats. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(232, 160, 69, 0.35) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(232, 160, 69, 0.35);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(232, 160, 69, 0.55);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .mt-brand {
@@ -29,13 +60,60 @@ body,
   letter-spacing: 0.08em;
   text-transform: lowercase;
   font-size: 1.35rem;
-  color: var(--mt-accent-2);
+  color: var(--mt-accent);
+}
+
+/* Filled primary / accent controls: dark ink on amber (white fails contrast). */
+.q-btn.bg-primary,
+.q-btn.bg-secondary,
+.q-btn.bg-accent,
+.q-btn.bg-orange-8,
+.q-btn.bg-orange-9,
+.q-btn-item.bg-primary,
+.q-btn-item.bg-orange-8 {
+  color: var(--mt-accent-ink) !important;
+}
+
+.q-slider__pin-text-container {
+  color: var(--mt-accent-ink) !important;
+}
+
+.mt-version-list {
+  border: 1px solid var(--mt-line);
+  border-radius: 4px;
+  background: #120f0c;
+  overflow: hidden;
+}
+
+.mt-version-item {
+  border-left: 3px solid transparent;
+  min-height: 44px;
+  color: var(--mt-text);
+}
+
+.mt-version-item:hover {
+  background: rgba(232, 160, 69, 0.08) !important;
+}
+
+.mt-version-item--active {
+  border-left-color: var(--mt-accent);
+  background: rgba(232, 160, 69, 0.18) !important;
+  color: var(--mt-text);
+}
+
+.mt-version-item--active .mt-version-caption,
+.mt-version-item--active .q-item__label--caption {
+  color: var(--mt-accent-2) !important;
 }
 
 .mt-panel {
   background: linear-gradient(180deg, rgba(44, 38, 31, 0.95), rgba(26, 22, 18, 0.92));
   border: 1px solid var(--mt-line);
   border-radius: 4px;
+  min-width: 0;
+  max-width: 100%;
+  /* hidden (not auto): grow with content vertically, never offer a horizontal bar */
+  overflow: hidden;
 }
 
 .mt-label {
@@ -55,13 +133,16 @@ body,
   font-size: 0.82rem;
   line-height: 1.45;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   color: var(--mt-text);
   background: #120f0c;
   border: 1px solid var(--mt-line);
   padding: 0.85rem;
   min-height: 12rem;
   max-height: 22rem;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .mt-meter {
@@ -76,4 +157,12 @@ body,
   display: block;
   height: 100%;
   background: linear-gradient(90deg, var(--mt-ok), var(--mt-accent-2), var(--mt-danger));
+}
+
+/* Shared lyric-diff word highlight (common tokens across sheet vs return). */
+.mt-diff-common {
+  background: rgba(106, 154, 91, 0.35);
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }

@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config as loadDotenv } from 'dotenv';
+import type { BackendPreference } from '../../src/models/settings';
+import { loadSettings } from './settingsStore';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,7 +26,10 @@ export function resolveProjectRoot(): string {
     path.resolve(process.cwd(), '..'),
   ];
   for (const dir of candidates) {
-    if (fs.existsSync(path.join(dir, '.env.local')) || fs.existsSync(path.join(dir, 'package.json'))) {
+    if (
+      fs.existsSync(path.join(dir, '.env.local')) ||
+      fs.existsSync(path.join(dir, 'package.json'))
+    ) {
       return dir;
     }
   }
@@ -58,29 +63,63 @@ function truthy(v: string | undefined): boolean {
   return ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase());
 }
 
+function settingsOverlay(): {
+  preference: BackendPreference;
+  apiKey: string | null;
+  project: string | null;
+  location: string;
+  credentialsPath: string | null;
+} {
+  try {
+    const s = loadSettings();
+    return {
+      preference: s.backendPreference,
+      apiKey: s.apiKey,
+      project: s.vertexProject,
+      location: s.vertexLocation || 'global',
+      credentialsPath: s.credentialsPath,
+    };
+  } catch {
+    return {
+      preference: 'auto',
+      apiKey: null,
+      project: null,
+      location: 'global',
+      credentialsPath: null,
+    };
+  }
+}
+
 /**
  * Resolve which Google AI backend to use.
- * Prefer Vertex when project is set (or GOOGLE_GENAI_USE_VERTEXAI=true).
- * Fall back to Gemini Developer API key.
+ * Settings (userData) override env when set; preference steers Vertex vs Gemini API.
  */
 export function resolveAiBackend(): AiBackendConfig | null {
+  const overlay = settingsOverlay();
   const forcedVertex =
-    truthy(process.env.GOOGLE_GENAI_USE_VERTEXAI) || truthy(process.env.GOOGLE_GENAI_USE_ENTERPRISE);
+    truthy(process.env.GOOGLE_GENAI_USE_VERTEXAI) ||
+    truthy(process.env.GOOGLE_GENAI_USE_ENTERPRISE);
   const forcedGemini = truthy(process.env.GOOGLE_GENAI_USE_GEMINI_API);
-  const project = getVertexProject();
-  const apiKey = getGoogleApiKey();
-  const location = getVertexLocation();
-  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
 
-  if (forcedGemini && apiKey) {
+  const apiKey = overlay.apiKey || getGoogleApiKey();
+  const project = overlay.project || getVertexProject();
+  const location = overlay.location || getVertexLocation();
+  const credentialsPath =
+    overlay.credentialsPath || process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() || undefined;
+
+  const preference = overlay.preference;
+
+  const asGemini = (): AiBackendConfig | null => {
+    if (!apiKey) return null;
     return {
       backend: 'gemini-api',
       apiKey,
       label: `Gemini API ${maskApiKey(apiKey)}`,
     };
-  }
+  };
 
-  if ((forcedVertex || project) && project) {
+  const asVertex = (): AiBackendConfig | null => {
+    if (!project) return null;
     const cfg: AiBackendConfig = {
       backend: 'vertex',
       project,
@@ -89,27 +128,20 @@ export function resolveAiBackend(): AiBackendConfig | null {
     };
     if (credentialsPath) cfg.credentialsPath = credentialsPath;
     return cfg;
+  };
+
+  if (preference === 'gemini-api') {
+    return asGemini();
+  }
+  if (preference === 'vertex') {
+    return asVertex() ?? asGemini();
   }
 
-  if (apiKey) {
-    return {
-      backend: 'gemini-api',
-      apiKey,
-      label: `Gemini API ${maskApiKey(apiKey)}`,
-    };
-  }
-
-  if (project) {
-    const cfg: AiBackendConfig = {
-      backend: 'vertex',
-      project,
-      location,
-      label: `Vertex ${project}/${location}`,
-    };
-    if (credentialsPath) cfg.credentialsPath = credentialsPath;
-    return cfg;
-  }
-
+  // auto
+  if (forcedGemini && apiKey) return asGemini();
+  if ((forcedVertex || project) && project) return asVertex();
+  if (apiKey) return asGemini();
+  if (project) return asVertex();
   return null;
 }
 

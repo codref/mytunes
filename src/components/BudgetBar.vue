@@ -12,7 +12,7 @@
     <div class="text-caption" :class="keyPresent ? 'text-positive' : 'text-negative'">
       {{ keyPresent ? keyMasked : 'No Vertex / API backend' }}
     </div>
-    <q-btn flat dense icon="settings" size="sm" @click="openLimits">
+    <q-btn flat dense icon="payments" size="sm" @click="openLimits">
       <q-tooltip>Budget limits</q-tooltip>
     </q-btn>
   </div>

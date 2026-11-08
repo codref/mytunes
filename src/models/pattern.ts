@@ -13,6 +13,8 @@ export interface PatternSong {
   genre: string;
   mood: string;
   bpm: number;
+  /** Meter as N/D, e.g. 4/4, 3/4, 6/8. */
+  timeSignature: string;
   key: string;
   energy: number;
   structure: string[];
@@ -64,6 +66,10 @@ export const MUSIC_KEYS = [
   'C minor',
   'G minor',
 ];
+
+export const TIME_SIGNATURES = ['4/4', '3/4', '2/4', '6/8', '12/8', '5/4', '7/8'] as const;
+
+export const DEFAULT_TIME_SIGNATURE = '4/4';
 
 function defaultSlot(id: BandSlotId): BandSlot {
   const presets: Record<BandSlotId, BandSlot> = {
@@ -128,17 +134,32 @@ function defaultSlot(id: BandSlotId): BandSlot {
   return structuredClone(presets[id]);
 }
 
-export function createDefaultPattern(partial?: Partial<Pattern>): Pattern {
+export interface PatternDefaultOverrides {
+  genre?: string;
+  mood?: string;
+  bpm?: number;
+  timeSignature?: string;
+  key?: string;
+  energy?: number;
+  language?: string;
+  lyriaMode?: LyriaMode;
+}
+
+export function createDefaultPattern(
+  partial?: Partial<Pattern>,
+  defaults?: PatternDefaultOverrides,
+): Pattern {
   const baseSong: PatternSong = {
-    genre: 'indie pop',
-    mood: 'dreamy',
-    bpm: 110,
-    key: 'G major',
-    energy: 55,
+    genre: defaults?.genre ?? 'indie pop',
+    mood: defaults?.mood ?? 'dreamy',
+    bpm: defaults?.bpm ?? 110,
+    timeSignature: defaults?.timeSignature ?? DEFAULT_TIME_SIGNATURE,
+    key: defaults?.key ?? 'G major',
+    energy: defaults?.energy ?? 55,
     structure: [...DEFAULT_STRUCTURE],
     durationHint: 'create a 2-minute song',
     instrumental: false,
-    language: 'English',
+    language: defaults?.language ?? 'English',
   };
 
   const pattern: Pattern = {
@@ -147,11 +168,25 @@ export function createDefaultPattern(partial?: Partial<Pattern>): Pattern {
     song: { ...baseSong, ...partial?.song },
     lyrics: partial?.lyrics ?? { text: '', source: 'manual' },
     slots: partial?.slots ?? BAND_SLOT_IDS.map(defaultSlot),
-    lyriaMode: partial?.lyriaMode ?? 'clip',
+    lyriaMode: partial?.lyriaMode ?? defaults?.lyriaMode ?? 'clip',
   };
+  normalizePatternSong(pattern.song);
   if (partial?.compiledPrompt) {
     pattern.compiledPrompt = partial.compiledPrompt;
   }
+  return pattern;
+}
+
+/** Fill fields missing from older saved patterns. */
+export function normalizePatternSong(song: PatternSong): PatternSong {
+  if (!song.timeSignature?.trim()) {
+    song.timeSignature = DEFAULT_TIME_SIGNATURE;
+  }
+  return song;
+}
+
+export function normalizePattern(pattern: Pattern): Pattern {
+  normalizePatternSong(pattern.song);
   return pattern;
 }
 

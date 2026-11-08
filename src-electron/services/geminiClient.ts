@@ -1,8 +1,16 @@
 import { GoogleGenAI } from '@google/genai';
+import { scoreLyricOverlap } from '../../src/models/compilePrompt';
+import {
+  parseLyriaTranscript,
+  parseTranscriptFlashJson,
+  shouldUseFlashTranscriptParse,
+} from '../../src/models/lyriaTranscript';
+import { DEFAULT_FLASH_MODEL } from '../../src/models/settings';
 import { resolveAiBackend, type AiBackend, type AiBackendConfig } from './env';
+import { getFlashModel } from './settingsStore';
 
 /** Flash for lyrics / prompt refine (both backends). Vertex: use global location. */
-export const FLASH_MODEL = 'gemini-3.5-flash-lite';
+export const FLASH_MODEL = DEFAULT_FLASH_MODEL;
 
 /** Vertex + Developer API share Clip id. */
 export const LYRIA_CLIP_MODEL = 'lyria-3-clip-preview';
@@ -15,7 +23,7 @@ export class KeyMissingError extends Error {
   code = 'KEY_MISSING' as const;
   constructor() {
     super(
-      'No Google AI backend configured. Set GOOGLE_CLOUD_PROJECT for Vertex, or GOOGLE_API_KEY for Gemini Developer API, in .env.local.',
+      'No Google AI backend configured. Open Settings to add a Gemini API key or Vertex project, or set credentials in .env.local.',
     );
     this.name = 'KeyMissingError';
   }
@@ -23,10 +31,37 @@ export class KeyMissingError extends Error {
 
 let client: GoogleGenAI | null = null;
 let clientBackend: AiBackend | null = null;
+let clientFingerprint: string | null = null;
 let activeConfig: AiBackendConfig | null = null;
+
+function backendFingerprint(cfg: AiBackendConfig): string {
+  return [
+    cfg.backend,
+    cfg.project ?? '',
+    cfg.location ?? '',
+    cfg.apiKey ?? '',
+    cfg.credentialsPath ?? '',
+  ].join('|');
+}
 
 export function getActiveBackend(): AiBackendConfig | null {
   return activeConfig ?? resolveAiBackend();
+}
+
+/** Drop cached client after Settings change. */
+export function resetAiClient(): void {
+  client = null;
+  clientBackend = null;
+  clientFingerprint = null;
+  activeConfig = null;
+}
+
+export function resolveFlashModel(): string {
+  try {
+    return getFlashModel() || FLASH_MODEL;
+  } catch {
+    return FLASH_MODEL;
+  }
 }
 
 export function getClient(): GoogleGenAI {
@@ -35,12 +70,14 @@ export function getClient(): GoogleGenAI {
     throw new KeyMissingError();
   }
 
-  if (client && clientBackend === cfg.backend) {
+  const fingerprint = backendFingerprint(cfg);
+  if (client && clientBackend === cfg.backend && clientFingerprint === fingerprint) {
     return client;
   }
 
   activeConfig = cfg;
   clientBackend = cfg.backend;
+  clientFingerprint = fingerprint;
 
   if (cfg.backend === 'vertex') {
     if (!cfg.project) throw new KeyMissingError();
@@ -91,17 +128,23 @@ function estimateFlashCost(usage?: FlashResult['usage']): number {
   return (inTok / 1_000_000) * 0.1 + (outTok / 1_000_000) * 0.4;
 }
 
-export async function flashGenerate(prompt: string, systemInstruction?: string): Promise<FlashResult> {
+export async function flashGenerate(
+  prompt: string,
+  systemInstruction?: string,
+  opts?: { temperature?: number },
+): Promise<FlashResult> {
   const ai = getClient();
+  const model = resolveFlashModel();
+  const temperature = opts?.temperature ?? 0.7;
   const response = await ai.models.generateContent({
-    model: FLASH_MODEL,
+    model,
     contents: prompt,
     config: systemInstruction
       ? {
           systemInstruction,
-          temperature: 0.7,
+          temperature,
         }
-      : { temperature: 0.7 },
+      : { temperature },
   });
 
   const text = response.text ?? '';
@@ -117,53 +160,267 @@ export async function flashGenerate(prompt: string, systemInstruction?: string):
   return {
     text,
     costUsd: estimateFlashCost(hasUsage ? usage : undefined),
-    model: FLASH_MODEL,
+    model,
     ...(hasUsage ? { usage } : {}),
   };
 }
 
+export { estimateFlashCost };
+
 export interface LyriaResult {
   audioBase64: string;
   mimeType: string;
+  /** Sung lyrics only (timestamps / arrangement prose stripped). */
   lyricsText: string;
+  /** Segment / production commentary Lyria appended after the lyric captions. */
+  arrangementNotes: string;
   model: string;
   costUsd: number;
   backend: AiBackend;
+  lyricsMatchScore?: number;
+  lyricsMismatch?: boolean;
+  /** Extra Flash cost for transcript split (billed separately in the ledger). */
+  flashParseCostUsd?: number;
+  flashParseModel?: string;
 }
+
+const TRANSCRIPT_SPLIT_SYSTEM = `You split Lyria model output into two fields.
+Return ONLY JSON: {"lyrics":"...","arrangementNotes":"..."}.
+lyrics = sung/spoken words only (keep section tags like [Verse]/[Chorus] if present; drop timestamps like [0.0:], [:], [0.0:5.8], and [[A0]] markers).
+arrangementNotes = production/segment commentary, Caption blobs, Mosic/BPM metadata summaries, and any prose describing instruments/atmosphere — not sung lines.
+Do not invent lyrics. If there is no commentary, arrangementNotes may be "".`;
+
+/**
+ * Prefer Flash to separate lyric captions from arrangement prose; fall back to heuristics.
+ */
+export async function splitLyriaTranscriptWithFlash(raw: string): Promise<{
+  lyrics: string;
+  arrangementNotes: string;
+  costUsd: number;
+  model: string;
+  usedFlash: boolean;
+}> {
+  const heuristic = parseLyriaTranscript(raw);
+  if (!raw.trim() || !shouldUseFlashTranscriptParse(raw)) {
+    return { ...heuristic, costUsd: 0, model: '', usedFlash: false };
+  }
+
+  const clipped = raw.length > 14000 ? `${raw.slice(0, 14000)}\n…` : raw;
+  try {
+    const result = await flashGenerate(
+      `Split this Lyria return text into sung lyrics vs arrangement commentary.\n\n${clipped}`,
+      TRANSCRIPT_SPLIT_SYSTEM,
+      { temperature: 0.1 },
+    );
+    const parsed = parseTranscriptFlashJson(result.text);
+    if (parsed && (parsed.lyrics || parsed.arrangementNotes)) {
+      // Prefer Flash lyrics when non-empty; keep heuristic notes if Flash omitted them.
+      return {
+        lyrics: parsed.lyrics || heuristic.lyrics,
+        arrangementNotes: parsed.arrangementNotes || heuristic.arrangementNotes,
+        costUsd: result.costUsd,
+        model: result.model,
+        usedFlash: true,
+      };
+    }
+  } catch {
+    /* budget / network — keep heuristic */
+  }
+  return { ...heuristic, costUsd: 0, model: '', usedFlash: false };
+}
+
+type LyriaPart = {
+  text?: string;
+  inlineData?: { data?: string; mimeType?: string };
+};
+
+type LyriaGenerateResponse = {
+  candidates?: Array<{
+    finishReason?: string;
+    content?: { parts?: LyriaPart[] };
+  }>;
+  promptFeedback?: {
+    blockReason?: string;
+    blockReasonMessage?: string;
+  };
+  parts?: LyriaPart[];
+};
 
 /**
  * Vertex Interactions often returns empty steps for Lyria; generateContent
  * returns audio as inlineData (audio/mpeg) plus text captions/lyrics.
+ * Lyria also intermittently returns a 200 with no audio — retry once when unblocked.
  */
-function extractFromGenerateContent(response: {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-        inlineData?: { data?: string; mimeType?: string };
-      }>;
-    };
-  }>;
-}): { audioBase64: string; mimeType: string; lyricsText: string } {
+function collectParts(response: LyriaGenerateResponse): LyriaPart[] {
+  const fromCandidate = response.candidates?.[0]?.content?.parts ?? [];
+  if (fromCandidate.length) return fromCandidate;
+  return response.parts ?? [];
+}
+
+function extractFromGenerateContent(response: LyriaGenerateResponse): {
+  audioBase64: string;
+  mimeType: string;
+  lyricsText: string;
+  arrangementNotes: string;
+  rawText: string;
+} {
   const lyricsParts: string[] = [];
   let audioBase64 = '';
   let mimeType = 'audio/mp3';
 
-  const parts = response.candidates?.[0]?.content?.parts ?? [];
-  for (const part of parts) {
-    if (part.inlineData?.data) {
-      audioBase64 = part.inlineData.data;
-      if (part.inlineData.mimeType) mimeType = part.inlineData.mimeType;
+  for (const part of collectParts(response)) {
+    const data = part.inlineData?.data;
+    if (data) {
+      audioBase64 = data;
+      if (part.inlineData?.mimeType) mimeType = part.inlineData.mimeType;
     } else if (part.text) {
       lyricsParts.push(part.text);
     }
   }
 
+  const rawText = lyricsParts.join('\n').trim();
+  const parsed = parseLyriaTranscript(rawText);
   return {
     audioBase64,
     mimeType,
-    lyricsText: lyricsParts.join('\n').trim(),
+    lyricsText: parsed.lyrics,
+    arrangementNotes: parsed.arrangementNotes,
+    rawText,
   };
+}
+
+function describeEmptyLyria(response: LyriaGenerateResponse, lyricsText: string): string {
+  const block = response.promptFeedback?.blockReason;
+  const blockMsg = response.promptFeedback?.blockReasonMessage;
+  const finish = response.candidates?.[0]?.finishReason;
+  const bits: string[] = [];
+  if (block) bits.push(`blockReason=${block}`);
+  if (blockMsg) bits.push(blockMsg);
+  if (finish) bits.push(`finishReason=${finish}`);
+  if (lyricsText) bits.push(`text=${lyricsText.slice(0, 180)}`);
+  if (!bits.length) bits.push('empty response (no candidates / no inline audio)');
+  return bits.join(' · ');
+}
+
+function isHardBlock(response: LyriaGenerateResponse): boolean {
+  const block = (response.promptFeedback?.blockReason ?? '').toUpperCase();
+  if (block && block !== 'BLOCK_REASON_UNSPECIFIED') return true;
+  const finish = (response.candidates?.[0]?.finishReason ?? '').toUpperCase();
+  return (
+    finish.includes('SAFETY') ||
+    finish.includes('BLOCK') ||
+    finish.includes('PROHIBITED') ||
+    finish.includes('RECITATION')
+  );
+}
+
+function extractLyricsBlock(prompt: string): { music: string; lyrics: string | null } {
+  const idx = prompt.search(/(?:^|\n)Lyrics:\s*\n/i);
+  if (idx < 0) return { music: prompt.trim(), lyrics: null };
+  const after = prompt.slice(idx).replace(/^[\s\S]*?Lyrics:\s*\n/i, '');
+  const musicBreak = after.search(/\nMusical direction:\s*\n/i);
+  const lyrics = (musicBreak >= 0 ? after.slice(0, musicBreak) : after).trim();
+  const before = prompt.slice(0, idx).trim();
+  const afterMusic =
+    musicBreak >= 0
+      ? after.slice(musicBreak).replace(/^\nMusical direction:\s*\n/i, '').trim()
+      : '';
+  const music = [
+    before
+      .replace(/Use these exact lyrics[\s\S]*?:/i, '')
+      .replace(/Source lyrics[\s\S]*?:/i, '')
+      .trim(),
+    afterMusic,
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+  return { music, lyrics: lyrics || null };
+}
+
+function rebuildLyricsFirst(music: string, lyrics: string, mode: 'clip' | 'full'): string {
+  let lyricBody = lyrics;
+  const maxLines = mode === 'clip' ? 40 : 120;
+  lyricBody = lyricBody.split('\n').slice(0, maxLines).join('\n');
+  let musicBody = music
+    .split('\n')
+    .filter((line) => {
+      const lower = line.toLowerCase();
+      return !(lower.includes('copyright') || lower.includes('do not imitate'));
+    })
+    .join('\n')
+    .trim();
+  const musicMax = mode === 'clip' ? 700 : 1200;
+  if (musicBody.length > musicMax) musicBody = musicBody.slice(0, musicMax).trim();
+  return [
+    'Song context: follow the source lyrics story and section structure.',
+    'Vocal writing: adapt wording only slightly for singability or safety; keep refrains, imagery, and meaning. Do not invent an unrelated lyric sheet.',
+    'Source lyrics (adapt minimally if needed):',
+    'Lyrics:',
+    lyricBody,
+    '',
+    'Musical direction:',
+    musicBody ||
+      (mode === 'clip' ? 'Short original song, clear vocals.' : 'Original full song, clear vocals.'),
+  ].join('\n');
+}
+
+/**
+ * Soften prompts; always keep Lyrics: and prefer lyrics-first layout.
+ */
+export function sanitizeLyriaPrompt(prompt: string, mode: 'clip' | 'full'): string {
+  let text = prompt.replace(/\r\n/g, '\n').trim();
+  text = text.replace(
+    /\b(in the style of|sounds like|inspired by|cover of|remake of)\s+[A-Z][\w'&.-]*(?:\s+[A-Z][\w'&.-]*){0,4}/g,
+    'original style',
+  );
+  const { music, lyrics } = extractLyricsBlock(text);
+  if (!lyrics) {
+    const maxChars = mode === 'clip' ? 1800 : 4000;
+    return text.length > maxChars ? `${text.slice(0, maxChars).trim()}\n…` : text;
+  }
+  return rebuildLyricsFirst(music, lyrics, mode);
+}
+
+/** Shorter music direction, same lyrics, lyrics-first. */
+export function simplifyLyriaPrompt(prompt: string, mode: 'clip' | 'full'): string {
+  const { music, lyrics } = extractLyricsBlock(sanitizeLyriaPrompt(prompt, mode));
+  if (!lyrics) {
+    return mode === 'clip'
+      ? 'A short original song with clear melody and groove.'
+      : 'Create an original 2-minute song with intro, verse, chorus, and outro.';
+  }
+  const keep: string[] = [];
+  for (const line of music.split('\n').map((l) => l.trim()).filter(Boolean)) {
+    const lower = line.toLowerCase();
+    if (
+      /\b(bpm|genre|mood|key:|tempo|vocals:|language:|instrument|structure:|arrangement|energy)/i.test(
+        lower,
+      ) ||
+      lower.startsWith('create') ||
+      (mode === 'full' && /minute|duration|length/.test(lower))
+    ) {
+      keep.push(line);
+    }
+    if (keep.length >= 8) break;
+  }
+  return rebuildLyricsFirst(keep.join('\n'), lyrics, mode);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function attachLyricFidelity(
+  result: LyriaResult,
+  userLyrics: string | null,
+): LyriaResult {
+  if (!userLyrics?.trim()) return result;
+  const score = scoreLyricOverlap(userLyrics, result.lyricsText || '');
+  result.lyricsMatchScore = score;
+  // Severe drift only — light paraphrase is expected with "adapt minimally".
+  result.lyricsMismatch = score < 0.08;
+  return result;
 }
 
 export async function generateLyriaMusic(
@@ -175,36 +432,97 @@ export async function generateLyriaMusic(
   if (!cfg) throw new KeyMissingError();
 
   const model = mode === 'clip' ? LYRIA_CLIP_MODEL : lyriaFullModelFor(cfg.backend);
+  const userLyrics = extractLyricsBlock(compiledPrompt).lyrics;
+  const hadLyrics = Boolean(userLyrics);
+  const prompts = [
+    sanitizeLyriaPrompt(compiledPrompt, mode),
+    simplifyLyriaPrompt(compiledPrompt, mode),
+  ];
+  const uniquePrompts = [...new Set(prompts.filter(Boolean))];
 
-  const response = await ai.models.generateContent({
-    model,
-    contents: compiledPrompt,
-    config: {
-      responseModalities: ['AUDIO', 'TEXT'],
-    },
-  });
+  let lastDetail = '';
+  let blockedWithLyrics = false;
+  let bestMismatch: LyriaResult | null = null;
 
-  const { audioBase64, mimeType, lyricsText } = extractFromGenerateContent(response);
+  for (let i = 0; i < uniquePrompts.length; i++) {
+    const contents = uniquePrompts[i]!;
+    const response = (await ai.models.generateContent({
+      model,
+      contents,
+      config: {
+        responseModalities: ['AUDIO', 'TEXT'],
+      },
+    })) as LyriaGenerateResponse;
 
-  if (!audioBase64) {
-    throw new Error('Lyria returned no audio. The prompt may have been blocked by safety filters.');
+    const extracted = extractFromGenerateContent(response);
+    const { audioBase64, mimeType, rawText } = extracted;
+    if (audioBase64) {
+      let lyricsText = extracted.lyricsText;
+      let arrangementNotes = extracted.arrangementNotes;
+      const base: LyriaResult = {
+        audioBase64,
+        mimeType,
+        lyricsText,
+        arrangementNotes,
+        model,
+        costUsd: mode === 'clip' ? 0.04 : 0.08,
+        backend: cfg.backend,
+      };
+      if (rawText && shouldUseFlashTranscriptParse(rawText)) {
+        const split = await splitLyriaTranscriptWithFlash(rawText);
+        base.lyricsText = split.lyrics;
+        base.arrangementNotes = split.arrangementNotes;
+        if (split.usedFlash && split.costUsd > 0) {
+          base.flashParseCostUsd = split.costUsd;
+          if (split.model) base.flashParseModel = split.model;
+        }
+      }
+      const result = attachLyricFidelity(base, userLyrics);
+      // If lyrics clearly don't match, try one more lyrics-first simplify before accepting.
+      if (result.lyricsMismatch && i < uniquePrompts.length - 1) {
+        bestMismatch = result;
+        continue;
+      }
+      return result;
+    }
+
+    lastDetail = describeEmptyLyria(response, rawText || extracted.lyricsText);
+    if (isHardBlock(response) && hadLyrics) {
+      blockedWithLyrics = true;
+    }
+
+    if (!isHardBlock(response) && i < uniquePrompts.length - 1) {
+      await sleep(800);
+      continue;
+    }
+    if (isHardBlock(response) && i < uniquePrompts.length - 1) {
+      continue;
+    }
   }
 
-  return {
-    audioBase64,
-    mimeType,
-    lyricsText,
-    model,
-    costUsd: mode === 'clip' ? 0.04 : 0.08,
-    backend: cfg.backend,
-  };
+  if (bestMismatch) {
+    return bestMismatch;
+  }
+
+  if (blockedWithLyrics) {
+    throw new Error(
+      `Lyria blocked this lyric sheet (${lastDetail}). Soften violent/political lines or famous rhymes, keep long stage directions out of the Lyrics tab, then retry.`,
+    );
+  }
+
+  const blockHint = /blockReason=OTHER/i.test(lastDetail)
+    ? ' Google blocked this prompt for an unspecified reason (OTHER). Shorten the Prompt tab and avoid real artist/song names.'
+    : ' Shorten the Prompt tab, remove real artist/song names, or switch to Clip.';
+
+  throw new Error(`Lyria returned no audio. ${lastDetail}.${blockHint}`);
 }
 
 export const LYRIA_SYSTEM_FOR_FLASH = `You help craft prompts for Google Lyria music generation.
 Rules:
-- Musical direction first (genre, mood, BPM, key, instruments, vocals, structure).
+- Include a short Song context / theme (mood, genre, story).
+- Prefer lyrics-first: Song context, then Lyrics:, then Musical direction.
+- Keep any source Lyrics: block; allow the model to adapt wording slightly for singability/safety while keeping story, structure, and refrains.
 - Use section tags like [Intro] -> [Verse 1] -> [Chorus].
-- Put user lyrics under a Lyrics: heading with [Verse]/[Chorus]/[Bridge] tags.
 - Say "Instrumental only, no vocals." when instrumental.
-- Never request named artist voices or copyrighted lyrics.
-- Return ONLY the final Lyria prompt text, no markdown fences.`;
+- Describe style with genre adjectives only — never name real artists, bands, or songs.
+- Keep prompts concise. Return ONLY the final Lyria prompt text, no markdown fences.`;
