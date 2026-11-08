@@ -1,0 +1,79 @@
+:root {
+  --mt-bg: #1a1612;
+  --mt-bg-elevated: #241f19;
+  --mt-panel: #2c261f;
+  --mt-line: #3d342a;
+  --mt-text: #f0e6d8;
+  --mt-muted: #a89880;
+  --mt-accent: #c45c26;
+  --mt-accent-2: #d4a04a;
+  --mt-ok: #6a9a5b;
+  --mt-warn: #d4a04a;
+  --mt-danger: #c44b3c;
+  --mt-font-display: 'Segoe UI', 'Trebuchet MS', sans-serif;
+  --mt-font-body: 'Segoe UI', 'Helvetica Neue', sans-serif;
+}
+
+html,
+body,
+#q-app {
+  min-height: 100%;
+  background: radial-gradient(ellipse at top left, #2a2218 0%, var(--mt-bg) 55%, #100e0c 100%);
+  color: var(--mt-text);
+  font-family: var(--mt-font-body);
+}
+
+.mt-brand {
+  font-family: var(--mt-font-display);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  font-size: 1.35rem;
+  color: var(--mt-accent-2);
+}
+
+.mt-panel {
+  background: linear-gradient(180deg, rgba(44, 38, 31, 0.95), rgba(26, 22, 18, 0.92));
+  border: 1px solid var(--mt-line);
+  border-radius: 4px;
+}
+
+.mt-label {
+  color: var(--mt-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.mt-knob-row {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.mt-prompt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: var(--mt-text);
+  background: #120f0c;
+  border: 1px solid var(--mt-line);
+  padding: 0.85rem;
+  min-height: 12rem;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+.mt-meter {
+  height: 6px;
+  background: #120f0c;
+  border: 1px solid var(--mt-line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.mt-meter > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--mt-ok), var(--mt-accent-2), var(--mt-danger));
+}
