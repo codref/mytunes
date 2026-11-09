@@ -11,6 +11,11 @@ import { registerIpcHandlers } from './services/ipcHandlers';
 
 const platform = process.platform || os.platform();
 
+// Keep userData on a stable lowercase path. Electron/Quasar may otherwise use
+// productName "myTunes", which on Linux is a different folder from "mytunes"
+// and makes songs/generations look missing.
+app.setPath('userData', path.join(app.getPath('appData'), 'mytunes'));
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'mytunes',

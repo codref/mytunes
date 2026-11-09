@@ -3,48 +3,7 @@
     <div class="row q-col-gutter-md studio-grid">
       <div class="col-12 col-md-8">
         <div class="mt-panel q-pa-md">
-          <div class="studio-toolbar q-mb-md">
-            <div class="studio-toolbar__primary row items-center no-wrap">
-              <q-select
-                v-model="mode"
-                :options="modeOptions"
-                dense
-                outlined
-                dark
-                emit-value
-                map-options
-                options-dense
-                class="studio-mode"
-                popup-content-class="bg-dark"
-              >
-                <template #option="scope">
-                  <q-item v-bind="scope.itemProps" dense>
-                    <q-item-section>
-                      <q-item-label>{{ scope.opt.title }}</q-item-label>
-                      <q-item-label caption>{{ scope.opt.caption }}</q-item-label>
-                    </q-item-section>
-                    <q-item-section side>
-                      <q-item-label class="text-primary">{{ scope.opt.price }}</q-item-label>
-                    </q-item-section>
-                  </q-item>
-                </template>
-              </q-select>
-              <div class="studio-song-meta text-caption text-grey-5 ellipsis">
-                {{ songLabel }}
-                <span v-if="isDirty" class="text-primary"> · unsaved</span>
-              </div>
-              <q-space />
-              <q-btn
-                color="primary"
-                text-color="dark"
-                unelevated
-                no-wrap
-                :loading="generating"
-                :disable="hardBlocked"
-                :label="generateLabel"
-                @click="onGenerate"
-              />
-            </div>
+          <div class="studio-toolbar q-mb-md row items-center no-wrap">
             <div class="studio-toolbar__files row items-center">
               <q-btn flat dense color="grey-4" label="New song" @click="onNewSong" />
               <q-btn
@@ -77,6 +36,38 @@
                 </q-list>
               </q-btn-dropdown>
             </div>
+            <q-space />
+            <q-btn-dropdown
+              split
+              color="primary"
+              text-color="dark"
+              unelevated
+              no-wrap
+              :loading="generating"
+              :disable="hardBlocked"
+              :label="generateLabel"
+              content-class="bg-dark"
+              @click="onGenerate"
+            >
+              <q-list dense dark style="min-width: 200px">
+                <q-item
+                  v-for="opt in modeOptions"
+                  :key="opt.value"
+                  clickable
+                  v-close-popup
+                  :active="mode === opt.value"
+                  @click="mode = opt.value"
+                >
+                  <q-item-section>
+                    <q-item-label>{{ opt.title }}</q-item-label>
+                    <q-item-label caption>{{ opt.caption }}</q-item-label>
+                  </q-item-section>
+                  <q-item-section side>
+                    <q-item-label class="text-primary">{{ opt.price }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+            </q-btn-dropdown>
           </div>
 
           <q-banner v-if="!keyPresent" class="bg-red-10 text-white q-mb-md" dense>
@@ -101,14 +92,6 @@
 
       <div class="col-12 col-md-4">
         <AudioPlayer />
-        <div class="mt-panel q-pa-md q-mt-md">
-          <div class="mt-label q-mb-sm">Next call</div>
-          <div class="text-h6 text-primary">${{ nextCost.toFixed(2) }} · {{ mode }}</div>
-          <div class="text-caption text-grey-5 q-mt-xs">
-            Clip = 30s preview. Full = lyria-3.5 song. Flash lyrics/refine billed separately by
-            tokens. Each Generate saves a recallable version of this song.
-          </div>
-        </div>
       </div>
     </div>
   </q-page>
@@ -141,8 +124,10 @@ const nextCost = computed(() => budgetStore.nextCost(mode.value));
 const gate = computed(() => budgetStore.gateFor(mode.value));
 const hardBlocked = computed(() => gate.value.gate === 'hard');
 const softWarned = computed(() => gate.value.gate === 'soft');
-const generateLabel = computed(() => `Generate · $${nextCost.value.toFixed(2)}`);
-const songLabel = computed(() => activeSong.value?.name || pattern.value.name || 'Untitled song');
+const generateLabel = computed(() => {
+  const title = mode.value === 'full' ? 'Full' : 'Clip';
+  return `Generate ${title} · $${nextCost.value.toFixed(2)}`;
+});
 
 const modeOptions = computed(() => [
   {
@@ -320,38 +305,14 @@ async function onGenerate() {
 }
 
 .studio-toolbar {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  max-width: 100%;
-  min-width: 0;
-}
-
-.studio-toolbar__primary {
   gap: 0.75rem;
-  min-width: 0;
   max-width: 100%;
-}
-
-.studio-mode {
-  flex: 0 0 auto;
-  width: 9.5rem;
-}
-
-.studio-mode :deep(.q-field__control),
-.studio-mode :deep(.q-field__native) {
-  min-height: 36px;
-}
-
-.studio-song-meta {
   min-width: 0;
-  flex: 1 1 auto;
 }
 
 .studio-toolbar__files {
   gap: 0.15rem;
   min-width: 0;
-  max-width: 100%;
   flex-wrap: wrap;
 }
 </style>

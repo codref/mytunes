@@ -5,8 +5,10 @@ import type {
   AssistantPatch,
 } from './assistant';
 import type { BudgetState } from './budget';
+import type { ListChatModelsResult } from './chatModels';
 import type { GenerationRecord } from './generation';
 import type { Pattern } from './pattern';
+import type { StudioPreset } from './presets';
 import type { AppSettingsPublic, AppSettingsUpdate, PatternDefaults } from './settings';
 import type { AppSession, Song } from './song';
 
@@ -21,6 +23,8 @@ export interface MytunesApi {
   getSettings: () => Promise<AppSettingsPublic>;
   setSettings: (update: AppSettingsUpdate) => Promise<AppSettingsPublic>;
   getPatternDefaults: () => Promise<PatternDefaults>;
+  /** Gemini chat models for the assistant picker (disk-cached). */
+  listChatModels: (opts?: { force?: boolean }) => Promise<ListChatModelsResult>;
   compilePrompt: (pattern: Pattern) => Promise<{ compiledPrompt: string }>;
   refinePrompt: (
     pattern: Pattern,
@@ -68,10 +72,35 @@ export interface MytunesApi {
     dayAfter: number;
   }>;
   listGenerations: (filter?: { songId?: string }) => Promise<GenerationRecord[]>;
+  patchGeneration: (
+    id: string,
+    patch: Partial<Pick<GenerationRecord, 'userNotes'>>,
+  ) => Promise<GenerationRecord | null>;
+  forkGeneration: (
+    generationId: string,
+    name: string,
+  ) => Promise<{ song: Song; generation: GenerationRecord }>;
+  exportVideo: (generationId: string) => Promise<{
+    mp4Path: string;
+    srtPath: string;
+    durationSec: number;
+    cueCount: number;
+  }>;
+  onExportVideoProgress: (
+    handler: (event: {
+      generationId: string;
+      percent: number | null;
+      message: string;
+    }) => void,
+  ) => () => void;
+  revealInFolder: (filePath: string) => Promise<{ ok: boolean }>;
   listSongs: () => Promise<Song[]>;
   saveSong: (song: Song) => Promise<Song>;
   loadSong: (id: string) => Promise<Song | null>;
   deleteSong: (id: string) => Promise<{ ok: boolean }>;
+  listPresets: () => Promise<StudioPreset[]>;
+  savePreset: (preset: StudioPreset) => Promise<StudioPreset>;
+  deletePreset: (id: string) => Promise<{ ok: boolean }>;
   getSession: () => Promise<AppSession>;
   setSession: (update: Partial<AppSession>) => Promise<AppSession>;
   /** @deprecated Prefer songs */

@@ -2,7 +2,7 @@
   <div ref="threadEl" class="assistant-thread">
     <div v-if="!messages.length" class="assistant-empty text-caption text-grey-5">
       Describe a song idea. Knobs update as we go — soft changes apply immediately; structure,
-      lyrics, and clip/full mode ask for Apply. Fine-tune, then Generate when ready.
+      timeline, lyrics, and clip/full mode ask for Apply. Fine-tune, then Generate when ready.
     </div>
 
     <div
@@ -39,6 +39,12 @@
             <div v-else-if="p.op === 'structure'" class="hard-preview">
               {{ Array.isArray(p.value) ? (p.value as string[]).join(' → ') : '' }}
             </div>
+            <div v-else-if="p.op === 'timeline'" class="hard-preview">
+              {{ formatTimelinePreview(p.value) }}
+            </div>
+            <div v-else-if="p.op === 'compositionMode'" class="hard-preview">
+              Composition → {{ String(p.value) }}
+            </div>
             <div v-else class="hard-preview">{{ String(p.value) }}</div>
             <div v-if="p.status === 'pending'" class="hard-actions q-mt-xs">
               <q-btn
@@ -70,6 +76,8 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue';
 import type { AssistantMessage } from '@/models/assistant';
+import { formatMmSs } from '@/models/timeline';
+import type { TimelineSegment } from '@/models/pattern';
 
 const props = defineProps<{
   messages: AssistantMessage[];
@@ -81,6 +89,14 @@ const emit = defineEmits<{
 }>();
 
 const threadEl = ref<HTMLElement | null>(null);
+
+function formatTimelinePreview(value: unknown): string {
+  if (!Array.isArray(value)) return String(value);
+  return (value as TimelineSegment[])
+    .slice(0, 8)
+    .map((s) => `${formatMmSs(Number(s.startSec) || 0)}–${formatMmSs(Number(s.endSec) || 0)} ${s.label || '?'}`)
+    .join(' · ');
+}
 
 watch(
   () => props.messages.length,

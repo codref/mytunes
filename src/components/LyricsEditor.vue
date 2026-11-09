@@ -44,10 +44,46 @@
       autogrow
       :input-style="{ minHeight: '180px', fontFamily: 'ui-monospace, monospace' }"
       label="Lyrics with [Verse] / [Chorus] / [Bridge]"
-      hint="Source lyrics + song theme go to Lyria; it may adapt wording slightly. Put long (stage directions) in parentheses."
+      hint="Source lyrics + song theme go to Lyria; it may adapt wording slightly. Tag singers with [Voice: Lead] (names match the Vocals tab). Put long (stage directions) in parentheses."
       :disable="pattern.song.instrumental"
       @update:model-value="onManualEdit"
     />
+
+    <LyricDiffView
+      v-if="!pattern.song.instrumental && pendingProposal"
+      class="q-mt-md"
+      meta-title="Chat proposal"
+      layout="unified"
+      left-heading="Current"
+      right-heading="Proposed"
+      empty-text="No proposed lyrics."
+      :clean-returned="false"
+      :show-adopt="false"
+      only-left-label="only in current"
+      only-right-label="only in proposed"
+      :source-text="pattern.lyrics.text"
+      :returned-text="pendingProposal.text"
+    >
+      <template #actions>
+        <q-btn
+          dense
+          unelevated
+          color="primary"
+          text-color="dark"
+          size="sm"
+          label="Apply"
+          @click="onApplyProposal"
+        />
+        <q-btn
+          dense
+          flat
+          color="grey-4"
+          size="sm"
+          label="Reject"
+          @click="onRejectProposal"
+        />
+      </template>
+    </LyricDiffView>
 
     <LyricDiffView
       v-if="!pattern.song.instrumental"
@@ -64,16 +100,21 @@ import { computed } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useQuasar } from 'quasar';
 import LyricDiffView from '@/components/LyricDiffView.vue';
+import { useAssistantStore } from '@/stores/assistant';
 import { useBudgetStore } from '@/stores/budget';
 import { useLibraryStore } from '@/stores/library';
 import { usePatternStore } from '@/stores/pattern';
 
 const $q = useQuasar();
 const patternStore = usePatternStore();
+const assistantStore = useAssistantStore();
 const budgetStore = useBudgetStore();
 const library = useLibraryStore();
 const { pattern, busy } = storeToRefs(patternStore);
+const { latestPendingLyricPatch } = storeToRefs(assistantStore);
 const { currentGeneration } = storeToRefs(library);
+
+const pendingProposal = computed(() => latestPendingLyricPatch.value);
 
 /** Prefer the sheet that was actually sent with the take. */
 const diffSource = computed(() => {
@@ -93,6 +134,19 @@ function onManualEdit() {
 function onAdopt(text: string) {
   pattern.value.lyrics = { text, source: 'generated' };
   $q.notify({ type: 'positive', message: 'Adopted returned lyrics.' });
+}
+
+function onApplyProposal() {
+  const proposal = pendingProposal.value;
+  if (!proposal) return;
+  assistantStore.applyHardPatch(proposal.messageId, proposal.patchId);
+  $q.notify({ type: 'positive', message: 'Applied lyric proposal.' });
+}
+
+function onRejectProposal() {
+  const proposal = pendingProposal.value;
+  if (!proposal) return;
+  assistantStore.rejectHardPatch(proposal.messageId, proposal.patchId);
 }
 
 async function onGenerate() {

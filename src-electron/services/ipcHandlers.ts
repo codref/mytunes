@@ -1,7 +1,8 @@
-import { ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import type { AssistantChatRequest, AssistantConversation, AssistantEvent } from '../../src/models/assistant';
 import { estimateMusicCost } from '../../src/models/budget';
 import type { Pattern } from '../../src/models/pattern';
+import type { StudioPreset } from '../../src/models/presets';
 import type { AppSettingsUpdate } from '../../src/models/settings';
 import type { AppSession, Song } from '../../src/models/song';
 import { runAssistantTurn } from './assistantAgent';
@@ -19,6 +20,7 @@ import {
 } from './budgetLedger';
 import { getBackendStatus, loadEnvFile } from './env';
 import {
+  cloneGenerationToSong,
   findGenerationByHash,
   findGenerationById,
   listPatterns,
@@ -29,12 +31,15 @@ import {
   deletePattern,
   loadPattern,
 } from './generationStore';
+import type { GenerationRecord } from '../../src/models/generation';
 import {
   generateLyriaMusic,
   KeyMissingError,
   resetAiClient,
   splitLyriaTranscriptWithFlash,
 } from './geminiClient';
+import { listChatModels } from './modelCatalog';
+import { exportGenerationVideo } from './videoExport';
 import { scoreLyricOverlap } from '../../src/models/compilePrompt';
 import {
   compileLocal,
@@ -48,6 +53,12 @@ import {
   toPublicSettings,
   updateSettings,
 } from './settingsStore';
+import {
+  deletePreset,
+  findPresetDuplicate,
+  listPresets,
+  savePreset,
+} from './presetStore';
 import {
   deleteSong,
   ensureSongForPattern,
@@ -82,6 +93,7 @@ const channels = [
   'mytunes:settings:get',
   'mytunes:settings:set',
   'mytunes:settings:patternDefaults',
+  'mytunes:models:listChat',
   'mytunes:compilePrompt',
   'mytunes:refinePrompt',
   'mytunes:writeLyrics',
@@ -92,10 +104,17 @@ const channels = [
   'mytunes:budget:setLimits',
   'mytunes:budget:check',
   'mytunes:generations:list',
+  'mytunes:generations:patch',
+  'mytunes:generations:fork',
+  'mytunes:generations:exportVideo',
+  'mytunes:revealInFolder',
   'mytunes:songs:list',
   'mytunes:songs:save',
   'mytunes:songs:load',
   'mytunes:songs:delete',
+  'mytunes:presets:list',
+  'mytunes:presets:save',
+  'mytunes:presets:delete',
   'mytunes:session:get',
   'mytunes:session:set',
   'mytunes:patterns:list',
@@ -148,6 +167,11 @@ export function registerIpcHandlers(): void {
     return toPublicSettings();
   });
   handle('mytunes:settings:patternDefaults', () => getPatternDefaults());
+
+  handle('mytunes:models:listChat', async (_e, optsRaw) => {
+    const opts = (optsRaw ?? {}) as { force?: boolean };
+    return listChatModels({ force: Boolean(opts.force) });
+  });
 
   handle('mytunes:compilePrompt', (_e, pattern) => {
     const compiledPrompt = compileLocal(pattern as Pattern);
@@ -377,6 +401,7 @@ export function registerIpcHandlers(): void {
         audioBase64: lyria.audioBase64,
         ...(lyria.lyricsText ? { lyricsText: lyria.lyricsText } : {}),
         ...(lyria.arrangementNotes ? { arrangementNotes: lyria.arrangementNotes } : {}),
+        ...(lyria.captionCues?.length ? { captionCues: lyria.captionCues } : {}),
         ...(lyria.lyricsMatchScore != null
           ? { lyricsMatchScore: lyria.lyricsMatchScore }
           : {}),
@@ -438,6 +463,31 @@ export function registerIpcHandlers(): void {
     const filter = (filterRaw ?? {}) as { songId?: string };
     return loadGenerations(filter.songId ? { songId: filter.songId } : undefined);
   });
+  handle('mytunes:generations:patch', (_e, id, patchRaw) => {
+    const patch = (patchRaw ?? {}) as Partial<Pick<GenerationRecord, 'userNotes'>>;
+    return patchGeneration(String(id), patch);
+  });
+  handle('mytunes:generations:fork', (_e, generationId, name) => {
+    const result = cloneGenerationToSong(String(generationId), String(name ?? ''));
+    setSession({ lastSongId: result.song.id });
+    return result;
+  });
+  handle('mytunes:generations:exportVideo', async (event, generationId) => {
+    const id = String(generationId ?? '');
+    return exportGenerationVideo(id, (percent, message) => {
+      event.sender.send('mytunes:exportVideo:progress', {
+        generationId: id,
+        percent,
+        message,
+      });
+    });
+  });
+  handle('mytunes:revealInFolder', (_e, filePath) => {
+    const p = String(filePath ?? '');
+    if (!p) throw new Error('No path to reveal');
+    shell.showItemInFolder(p);
+    return { ok: true as const };
+  });
 
   handle('mytunes:songs:list', () => listSongs());
   handle('mytunes:songs:save', (_e, songRaw) => {
@@ -451,6 +501,18 @@ export function registerIpcHandlers(): void {
     return song;
   });
   handle('mytunes:songs:delete', (_e, id) => deleteSong(String(id)));
+
+  handle('mytunes:presets:list', () => listPresets());
+  handle('mytunes:presets:save', (_e, presetRaw) => {
+    const preset = presetRaw as StudioPreset;
+    const duplicate = findPresetDuplicate(preset);
+    if (duplicate && duplicate.id !== preset.id) {
+      return savePreset({ ...preset, id: duplicate.id });
+    }
+    return savePreset(preset);
+  });
+  handle('mytunes:presets:delete', (_e, id) => deletePreset(String(id)));
+
   handle('mytunes:session:get', () => getSession());
   handle('mytunes:session:set', (_e, update) => setSession(update as Partial<AppSession>));
 
@@ -480,6 +542,7 @@ export function registerIpcHandlers(): void {
         message: request.message,
         pattern: request.pattern,
         history: request.history,
+        ...(request.model ? { model: request.model } : {}),
         signal: controller.signal,
         onProgress: (text) => {
           emitAssistant(event, {

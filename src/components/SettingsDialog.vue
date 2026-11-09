@@ -128,7 +128,15 @@
             />
           </div>
           <div class="col-6">
-            <q-input v-model="form.patternDefaults.language" dark filled dense label="Language" />
+            <q-select
+              v-model="form.patternDefaults.language"
+              :options="lyriaLanguages"
+              dark
+              filled
+              dense
+              clearable
+              label="Language"
+            />
           </div>
           <div class="col-12">
             <q-btn-toggle
@@ -160,7 +168,7 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
 import { useQuasar } from 'quasar';
-import { MUSIC_KEYS, TIME_SIGNATURES } from '@/models/pattern';
+import { LYRIA_LANGUAGES, MUSIC_KEYS, TIME_SIGNATURES } from '@/models/pattern';
 import type { AppSettingsPublic, BackendPreference, PatternDefaults } from '@/models/settings';
 import { DEFAULT_FLASH_MODEL } from '@/models/settings';
 import { useBudgetStore } from '@/stores/budget';
@@ -170,6 +178,7 @@ const emit = defineEmits<{ 'update:modelValue': [boolean] }>();
 
 const $q = useQuasar();
 const budgetStore = useBudgetStore();
+const lyriaLanguages = [...LYRIA_LANGUAGES];
 
 const publicSettings = ref<AppSettingsPublic | null>(null);
 const saving = ref(false);

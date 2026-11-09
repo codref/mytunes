@@ -168,6 +168,27 @@ export const useLibraryStore = defineStore('library', () => {
     await refreshSongs();
   }
 
+  async function updateGenerationNotes(id: string, notes: string): Promise<void> {
+    if (!window.mytunes) throw new Error('Electron bridge unavailable');
+    const updated = await window.mytunes.patchGeneration(id, { userNotes: notes });
+    if (!updated) throw new Error('Generation not found');
+    const idx = generations.value.findIndex((g) => g.id === id);
+    if (idx >= 0) {
+      generations.value[idx] = updated;
+    }
+    if (currentGeneration.value?.id === id) {
+      currentGeneration.value = updated;
+    }
+  }
+
+  async function forkFromGeneration(g: GenerationRecord, name: string): Promise<Song> {
+    if (!window.mytunes) throw new Error('Electron bridge unavailable');
+    const result = await window.mytunes.forkGeneration(g.id, name);
+    await applySong(result.song);
+    await refreshSongs();
+    return result.song;
+  }
+
   async function recallGeneration(g: GenerationRecord): Promise<void> {
     const patternStore = usePatternStore();
     const snapshot = patternFromGeneration(g);
@@ -267,6 +288,8 @@ export const useLibraryStore = defineStore('library', () => {
     newSong,
     deleteActiveSong,
     recallGeneration,
+    updateGenerationNotes,
+    forkFromGeneration,
     generateMusic,
     restoreSession,
     markClean,

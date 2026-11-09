@@ -11,9 +11,13 @@ export type SoftPatchOp =
   | 'song.language'
   | 'song.instrumental'
   | 'song.durationHint'
+  | 'song.soundscape'
+  | 'song.productionQuality'
   | 'slot.enabled'
   | 'slot.knob'
-  | 'slot.notes';
+  | 'slot.notes'
+  | 'timeline.segment'
+  | 'voice';
 
 export interface SoftPatch {
   kind: 'soft';
@@ -26,9 +30,11 @@ export interface SoftPatch {
   previous?: unknown;
   slotId?: string;
   knobKey?: string;
+  segmentId?: string;
+  voiceId?: string;
 }
 
-export type HardPatchOp = 'lyrics' | 'structure' | 'lyriaMode';
+export type HardPatchOp = 'lyrics' | 'structure' | 'lyriaMode' | 'timeline' | 'compositionMode';
 
 export interface HardPatch {
   kind: 'hard';
@@ -69,8 +75,9 @@ export interface AssistantChatRequest {
   message: string;
   pattern: Pattern;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Selected chat model id (overrides settings flashModel for this turn). */
+  model?: string;
 }
-
 export type AssistantEvent =
   | { type: 'progress'; conversationId: string; text: string }
   | {
@@ -92,5 +99,11 @@ export const ASSISTANT_ACTION_CHIPS = [
     id: 'structure',
     label: 'Suggest structure',
     prompt: 'Propose a song structure that fits the current genre and mood.',
+  },
+  {
+    id: 'timeline',
+    label: 'Build timeline',
+    prompt:
+      'Read the current configuration and transpose it into a coherent timeline with timed segments, directions, and Intensity 1–10. Switch to timeline mode and propose the full timeline for me to Apply.',
   },
 ] as const;

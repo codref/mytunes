@@ -213,6 +213,10 @@ export default defineConfig((/* ctx */) => {
 
       packager: {
         // https://github.com/electron-userland/electron-packager/blob/master/docs/api.md#options
+        // Unpack ffmpeg binary so it remains executable outside the asar archive.
+        asar: {
+          unpack: '**/node_modules/ffmpeg-static/**',
+        },
         // OS X / Mac App Store
         // appBundleId: '',
         // appCategoryType: '',

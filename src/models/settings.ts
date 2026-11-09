@@ -48,7 +48,7 @@ export interface AppSettingsUpdate {
   patternDefaults?: PatternDefaults;
 }
 
-export const DEFAULT_FLASH_MODEL = 'gemini-3.5-flash-lite';
+export const DEFAULT_FLASH_MODEL = 'gemini-3.8-flash';
 
 export function createDefaultSettings(): AppSettings {
   return {

@@ -51,16 +51,36 @@ function meterGuidance(timeSignature: string, bpm: number): string {
 }
 
 function songConfigBlock(pattern: Pattern): string {
-  const { song } = normalizePattern(pattern);
-  const structure = song.structure.length ? song.structure.join(' -> ') : '(none set)';
-  return `Song settings:
-- Language: ${song.language}
-- Genre: ${song.genre}
-- Mood: ${song.mood}
-- Key: ${song.key}
-- Energy: ${song.energy}/100
-- ${meterGuidance(song.timeSignature, song.bpm)}
-- Structure (use these section tags on their own lines): ${structure}`;
+  const normalized = normalizePattern(pattern);
+  const { song, slots } = normalized;
+  const lines = [
+    'Song settings:',
+    `- Language: ${song.language}`,
+    `- Genre: ${song.genre}`,
+    `- Mood: ${song.mood}`,
+    `- Key: ${song.key}`,
+    `- Energy: ${song.energy}/100`,
+    `- ${meterGuidance(song.timeSignature, song.bpm)}`,
+  ];
+  if (song.soundscape?.trim()) lines.push(`- Soundscape: ${song.soundscape.trim()}`);
+  if (song.productionQuality?.trim()) {
+    lines.push(`- Production: ${song.productionQuality.trim()}`);
+  }
+  if (song.auto?.structure) {
+    lines.push(
+      '- Structure: choose a fitting section layout with [Verse]/[Chorus]/[Bridge]-style tags.',
+    );
+  } else {
+    const structure = song.structure.length ? song.structure.join(' -> ') : '(none set)';
+    lines.push(`- Structure (use these section tags on their own lines): ${structure}`);
+  }
+  const vocals = slots.find((s) => s.id === 'vocals');
+  if (vocals?.enabled && vocals.voices && vocals.voices.length > 1) {
+    lines.push(
+      `- Voices: ${vocals.voices.map((v) => v.name).join(', ')}. Tag lines with [Voice: Name] for each singer; untagged lines are the lead.`,
+    );
+  }
+  return lines.join('\n');
 }
 
 const LYRICS_SYSTEM =

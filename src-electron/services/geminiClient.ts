@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { extractCaptionCues, type CaptionCue } from '../../src/models/captionCues';
 import { scoreLyricOverlap } from '../../src/models/compilePrompt';
 import {
   parseLyriaTranscript,
@@ -81,6 +82,16 @@ export function getClient(): GoogleGenAI {
 
   if (cfg.backend === 'vertex') {
     if (!cfg.project) throw new KeyMissingError();
+    // User ADC often needs an explicit quota project for aiplatform.googleapis.com.
+    if (!process.env.GOOGLE_CLOUD_QUOTA_PROJECT?.trim()) {
+      process.env.GOOGLE_CLOUD_QUOTA_PROJECT = cfg.project;
+    }
+    if (!process.env.GCLOUD_PROJECT?.trim()) {
+      process.env.GCLOUD_PROJECT = cfg.project;
+    }
+    if (!process.env.GOOGLE_CLOUD_PROJECT?.trim()) {
+      process.env.GOOGLE_CLOUD_PROJECT = cfg.project;
+    }
     client = new GoogleGenAI({
       vertexai: true,
       project: cfg.project,
@@ -174,6 +185,10 @@ export interface LyriaResult {
   lyricsText: string;
   /** Segment / production commentary Lyria appended after the lyric captions. */
   arrangementNotes: string;
+  /** Timed lyric cues parsed from raw Lyria text (before stripping). */
+  captionCues?: CaptionCue[];
+  /** Raw Lyria text parts (for cue extraction / debug). */
+  rawText?: string;
   model: string;
   costUsd: number;
   backend: AiBackend;
@@ -394,15 +409,17 @@ export function simplifyLyriaPrompt(prompt: string, mode: 'clip' | 'full'): stri
   for (const line of music.split('\n').map((l) => l.trim()).filter(Boolean)) {
     const lower = line.toLowerCase();
     if (
-      /\b(bpm|genre|mood|key:|tempo|vocals:|language:|instrument|structure:|arrangement|energy)/i.test(
+      /\b(bpm|genre|mood|key:|tempo|vocals|language:|instrument|structure:|arrangement|energy|assign sung|ensemble notes|vocal notes|soundscape|production|timed structure|intensity)/i.test(
         lower,
       ) ||
+      /^\[\d+:\d+/.test(line) ||
+      /^-\s+\w/.test(line) ||
       lower.startsWith('create') ||
       (mode === 'full' && /minute|duration|length/.test(lower))
     ) {
       keep.push(line);
     }
-    if (keep.length >= 8) break;
+    if (keep.length >= 12) break;
   }
   return rebuildLyricsFirst(keep.join('\n'), lyrics, mode);
 }
@@ -459,6 +476,7 @@ export async function generateLyriaMusic(
     if (audioBase64) {
       let lyricsText = extracted.lyricsText;
       let arrangementNotes = extracted.arrangementNotes;
+      const captionCues = rawText ? extractCaptionCues(rawText) : [];
       const base: LyriaResult = {
         audioBase64,
         mimeType,
@@ -467,6 +485,8 @@ export async function generateLyriaMusic(
         model,
         costUsd: mode === 'clip' ? 0.04 : 0.08,
         backend: cfg.backend,
+        ...(rawText ? { rawText } : {}),
+        ...(captionCues.length ? { captionCues } : {}),
       };
       if (rawText && shouldUseFlashTranscriptParse(rawText)) {
         const split = await splitLyriaTranscriptWithFlash(rawText);
@@ -522,7 +542,9 @@ Rules:
 - Include a short Song context / theme (mood, genre, story).
 - Prefer lyrics-first: Song context, then Lyrics:, then Musical direction.
 - Keep any source Lyrics: block; allow the model to adapt wording slightly for singability/safety while keeping story, structure, and refrains.
-- Use section tags like [Intro] -> [Verse 1] -> [Chorus].
+- Use section tags like [Intro] -> [Verse 1] -> [Chorus] when composition is section-based.
+- When timed structure blocks like [0:00 - 0:12] Label: … Intensity: N/10 are present, keep them authoritative — do not collapse them into a flat Structure line.
 - Say "Instrumental only, no vocals." when instrumental.
+- Preserve Soundscape: and Production: lines when present.
 - Describe style with genre adjectives only — never name real artists, bands, or songs.
 - Keep prompts concise. Return ONLY the final Lyria prompt text, no markdown fences.`;

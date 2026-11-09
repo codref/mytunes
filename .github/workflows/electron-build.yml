@@ -1,0 +1,106 @@
+name: Electron build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: electron-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux
+            os: ubuntu-latest
+            artifact: linux
+          - label: Windows
+            os: windows-latest
+            artifact: windows
+          - label: macOS
+            os: macos-latest
+            artifact: macos
+    env:
+      # Unsigned CI builds; enable signing later with platform certs/secrets.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            src-electron/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install Electron dependencies
+        working-directory: src-electron
+        run: npm ci
+
+      - name: Build Electron app
+        run: npm run build:electron
+
+      - name: Archive packaged app
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="mytunes-${{ matrix.artifact }}-${{ github.ref_name }}"
+          mkdir -p release
+          if [[ ! -d dist/electron/Packaged ]]; then
+            echo "Missing dist/electron/Packaged — Quasar packager did not produce a bundle."
+            ls -la dist/electron || true
+            exit 1
+          fi
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            powershell -Command "Compress-Archive -Path 'dist/electron/Packaged/*' -DestinationPath 'release/${out}.zip'"
+          else
+            (cd dist/electron/Packaged && zip -r "$GITHUB_WORKSPACE/release/${out}.zip" .)
+          fi
+          ls -lh release/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mytunes-${{ matrix.artifact }}-${{ github.ref_name }}
+          path: release/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: mytunes-*
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true

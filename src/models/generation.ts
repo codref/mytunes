@@ -1,3 +1,4 @@
+import type { CaptionCue } from './captionCues';
 import type { LyriaMode, Pattern } from './pattern';
 
 export interface GenerationRecord {
@@ -18,6 +19,10 @@ export interface GenerationRecord {
   lyricsText?: string;
   /** Production / segment commentary Lyria appended after the lyric captions. */
   arrangementNotes?: string;
+  /** Timed lyric cues from Lyria (for SRT export). */
+  captionCues?: CaptionCue[];
+  /** User annotation for this take (what worked, what to keep). */
+  userNotes?: string;
   /** How closely Lyria's returned transcript matches the user lyric sheet (0–1). */
   lyricsMatchScore?: number;
   /** True when user supplied lyrics and overlap is suspiciously low. */

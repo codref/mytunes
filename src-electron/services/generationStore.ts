@@ -1,8 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app, protocol } from 'electron';
+import type { CaptionCue } from '../../src/models/captionCues';
 import type { GenerationRecord } from '../../src/models/generation';
-import { normalizePattern, type LyriaMode, type Pattern } from '../../src/models/pattern';
+import {
+  createDefaultPattern,
+  normalizePattern,
+  type LyriaMode,
+  type Pattern,
+} from '../../src/models/pattern';
+import { createSong, type Song } from '../../src/models/song';
+import { saveSong } from './songStore';
 
 const SCHEMA = 'mytunes';
 
@@ -61,7 +69,12 @@ export function findGenerationById(id: string): GenerationRecord | undefined {
 
 export function patchGeneration(
   id: string,
-  patch: Partial<Pick<GenerationRecord, 'lyricsText' | 'arrangementNotes' | 'lyricsMatchScore' | 'lyricsMismatch'>>,
+  patch: Partial<
+    Pick<
+      GenerationRecord,
+      'lyricsText' | 'arrangementNotes' | 'userNotes' | 'lyricsMatchScore' | 'lyricsMismatch'
+    >
+  >,
 ): GenerationRecord | null {
   const list = loadGenerations();
   const idx = list.findIndex((g) => g.id === id);
@@ -82,6 +95,7 @@ export function saveGeneration(input: {
   compiledPrompt: string;
   lyricsText?: string;
   arrangementNotes?: string;
+  captionCues?: CaptionCue[];
   lyricsMatchScore?: number;
   lyricsMismatch?: boolean;
   audioBase64: string;
@@ -111,6 +125,9 @@ export function saveGeneration(input: {
   if (input.arrangementNotes) {
     record.arrangementNotes = input.arrangementNotes;
   }
+  if (input.captionCues?.length) {
+    record.captionCues = input.captionCues;
+  }
   if (input.lyricsMatchScore != null) {
     record.lyricsMatchScore = input.lyricsMatchScore;
   }
@@ -128,6 +145,82 @@ export function getGenerationAudioPath(id: string): string | null {
   const rec = findGenerationById(id);
   if (!rec) return null;
   return fs.existsSync(rec.audioPath) ? rec.audioPath : null;
+}
+
+function patternFromSourceGeneration(source: GenerationRecord, name: string): Pattern {
+  if (source.patternSnapshot) {
+    const pattern = normalizePattern(
+      JSON.parse(JSON.stringify(source.patternSnapshot)) as Pattern,
+    );
+    pattern.id = crypto.randomUUID();
+    pattern.name = name;
+    return pattern;
+  }
+  const partial: Parameters<typeof createDefaultPattern>[0] = {
+    id: crypto.randomUUID(),
+    name,
+    lyriaMode: source.mode,
+    compiledPrompt: source.compiledPrompt,
+  };
+  if (source.lyricsText?.trim()) {
+    partial.lyrics = { text: source.lyricsText, source: 'generated' };
+  }
+  return createDefaultPattern(partial);
+}
+
+/** Fork a take into a new song thread with knobs/lyrics + copied audio. */
+export function cloneGenerationToSong(
+  sourceGenerationId: string,
+  name: string,
+): { song: Song; generation: GenerationRecord } {
+  const source = findGenerationById(sourceGenerationId);
+  if (!source) {
+    throw new Error('Generation not found');
+  }
+  const srcAudio = getGenerationAudioPath(source.id);
+  if (!srcAudio) {
+    throw new Error('Audio file missing for this version');
+  }
+
+  const songName = name.trim() || `${source.patternName} (fork)`;
+  const pattern = patternFromSourceGeneration(source, songName);
+  const newGenId = crypto.randomUUID();
+  const audioPath = path.join(generationsDir(), `${newGenId}.mp3`);
+  fs.copyFileSync(srcAudio, audioPath);
+
+  const generation: GenerationRecord = {
+    id: newGenId,
+    createdAt: new Date().toISOString(),
+    songId: pattern.id,
+    patternId: pattern.id,
+    patternName: pattern.name,
+    mode: source.mode,
+    model: source.model,
+    costUsd: source.costUsd,
+    promptHash: source.promptHash,
+    compiledPrompt: source.compiledPrompt,
+    patternSnapshot: structuredClone(pattern),
+    audioPath,
+    audioFileUrl: `${SCHEMA}://generation/${newGenId}`,
+  };
+  if (source.lyricsText) generation.lyricsText = source.lyricsText;
+  if (source.arrangementNotes) generation.arrangementNotes = source.arrangementNotes;
+  if (source.captionCues?.length) generation.captionCues = source.captionCues;
+  if (source.lyricsMatchScore != null) generation.lyricsMatchScore = source.lyricsMatchScore;
+  if (source.lyricsMismatch != null) generation.lyricsMismatch = source.lyricsMismatch;
+
+  const song = createSong(pattern, {
+    id: pattern.id,
+    name: pattern.name,
+    activeGenerationId: generation.id,
+  });
+  const savedSong = saveSong(song);
+
+  const list = loadGenerations();
+  list.unshift(generation);
+  saveIndex(list.slice(0, 200));
+
+  return { song: savedSong, generation: normalizeGeneration(generation) };
 }
 
 export function registerAudioProtocol(): void {

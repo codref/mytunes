@@ -1,4 +1,12 @@
-import { normalizePatternSong, type BandSlot, type Pattern, type PatternSong } from './pattern';
+import {
+  getCompositionMode,
+  normalizePatternSong,
+  type BandSlot,
+  type Pattern,
+  type PatternSong,
+  type VocalVoice,
+} from './pattern';
+import { formatTimelineBlock, sortTimeline } from './timeline';
 
 function energyLabel(energy: number): string {
   if (energy < 30) return 'low energy, restrained';
@@ -17,6 +25,20 @@ function describeSlot(slot: BandSlot): string | null {
   const detail = parts.length ? ` (${parts.join(', ')})` : '';
   const noteText = notes ? ` Notes: ${notes}` : '';
   return `${slot.id}${detail}.${noteText}`;
+}
+
+function describeVoice(v: VocalVoice): string {
+  const gender = (v.gender || '').trim();
+  const timbre = (v.timbre || '').trim();
+  const bits = [
+    v.style,
+    gender || null,
+    `${v.range}-range`,
+    timbre ? `${timbre} timbre` : null,
+    `${v.delivery} delivery`,
+    `presence ${v.presence}/100`,
+  ].filter(Boolean);
+  return bits.join(', ');
 }
 
 /**
@@ -54,17 +76,39 @@ export function splitLyricStageDirections(lyrics: string): {
 function arrangementLines(pattern: Pattern, stageNotes: string[]): string[] {
   const { song, slots } = pattern;
   const lines: string[] = [];
+  const timelineMode = getCompositionMode(pattern) === 'timeline';
+  const timeline = sortTimeline(song.timeline ?? []);
+
+  const energyPart = timelineMode
+    ? `Overall bias: ${energyLabel(song.energy)} (segment Intensity overrides dynamics).`
+    : `Energy: ${energyLabel(song.energy)}.`;
 
   lines.push(
-    `${song.genre}. Mood: ${song.mood}. Tempo: ${song.bpm} BPM in ${song.timeSignature}. Key: ${song.key}. Energy: ${energyLabel(song.energy)}.`,
+    `${song.genre}. Mood: ${song.mood}. Tempo: ${song.bpm} BPM in ${song.timeSignature}. Key: ${song.key}. ${energyPart}`,
   );
 
-  if (song.structure.length) {
+  if (timelineMode && timeline.length) {
+    lines.push('Timed structure (follow these segments closely):');
+    for (const seg of timeline) {
+      lines.push(formatTimelineBlock(seg));
+    }
+  } else if (song.structure.length && !song.auto?.structure) {
     lines.push(`Structure: ${song.structure.join(' -> ')}.`);
   }
 
-  if (pattern.lyriaMode === 'full' && song.durationHint?.trim()) {
+  if (
+    pattern.lyriaMode === 'full' &&
+    song.durationHint?.trim() &&
+    !song.auto?.durationHint
+  ) {
     lines.push(song.durationHint.trim());
+  }
+
+  if (song.soundscape?.trim()) {
+    lines.push(`Soundscape: ${song.soundscape.trim()}.`);
+  }
+  if (song.productionQuality?.trim()) {
+    lines.push(`Production: ${song.productionQuality.trim()}.`);
   }
 
   if (song.instrumental) {
@@ -75,11 +119,37 @@ function arrangementLines(pattern: Pattern, stageNotes: string[]): string[] {
   lines.push(`Language: ${song.language}.`);
   const vocals = slots.find((s) => s.id === 'vocals');
   if (vocals?.enabled) {
-    const style = String(vocals.knobs.style ?? 'expressive');
-    const range = String(vocals.knobs.range ?? 'mid');
-    const delivery = String(vocals.knobs.delivery ?? 'melodic');
-    lines.push(`Vocals: ${style} ${range}-range ${delivery} delivery.`);
-    if (vocals.notes.trim()) lines.push(`Vocal notes: ${vocals.notes.trim()}`);
+    const voices: VocalVoice[] = vocals.voices?.length
+      ? vocals.voices
+      : [
+          {
+            id: 'lead',
+            name: 'Lead',
+            style: String(vocals.knobs.style ?? 'expressive'),
+            range: String(vocals.knobs.range ?? 'mid'),
+            delivery: String(vocals.knobs.delivery ?? 'melodic'),
+            presence: Number(vocals.knobs.presence ?? 70),
+            notes: vocals.notes,
+            gender: '',
+            timbre: '',
+          },
+        ];
+    if (voices.length === 1) {
+      const v = voices[0]!;
+      lines.push(`Vocals: ${v.name} — ${describeVoice(v)}.`);
+      const note = (v.notes || vocals.notes).trim();
+      if (note) lines.push(`Vocal notes: ${note}`);
+    } else {
+      lines.push('Vocals (multiple voices):');
+      for (const v of voices) {
+        const note = v.notes.trim() ? `; notes: ${v.notes.trim()}` : '';
+        lines.push(`- ${v.name}: ${describeVoice(v)}${note}.`);
+      }
+      lines.push(
+        'Assign sung lines tagged [Voice: Name] to that voice; untagged lines go to the first/lead voice.',
+      );
+      if (vocals.notes.trim()) lines.push(`Ensemble notes: ${vocals.notes.trim()}`);
+    }
   }
 
   const instrumentLines = slots

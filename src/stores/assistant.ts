@@ -8,7 +8,9 @@ import {
   type HardPatch,
   type SoftPatch,
 } from '@/models/assistant';
+import type { ChatModelInfo } from '@/models/chatModels';
 import { toIpcPayload } from '@/models/ipc';
+import { DEFAULT_FLASH_MODEL } from '@/models/settings';
 import { useBudgetStore } from '@/stores/budget';
 import { usePatternStore } from '@/stores/pattern';
 
@@ -33,6 +35,11 @@ export const useAssistantStore = defineStore('assistant', () => {
   const busy = ref(false);
   const composerDraft = ref('');
   const lastError = ref<string | null>(null);
+  const selectedModel = ref(DEFAULT_FLASH_MODEL);
+  const chatModels = ref<ChatModelInfo[]>([]);
+  const modelsLoading = ref(false);
+  const modelsCached = ref(false);
+  const modelsFetchedAt = ref<string | null>(null);
   let unsubscribeEvents: (() => void) | null = null;
 
   const activeConversation = computed(
@@ -40,6 +47,28 @@ export const useAssistantStore = defineStore('assistant', () => {
   );
 
   const messages = computed(() => activeConversation.value?.messages ?? []);
+
+  /** Pending lyric hard-patches in the active thread, newest message last. */
+  const pendingLyricPatches = computed(() => {
+    const out: { messageId: string; patchId: string; text: string; label: string }[] = [];
+    for (const msg of messages.value) {
+      for (const patch of msg.hardPatches ?? []) {
+        if (patch.op !== 'lyrics' || patch.status !== 'pending') continue;
+        out.push({
+          messageId: msg.id,
+          patchId: patch.id,
+          text: typeof patch.value === 'string' ? patch.value : '',
+          label: patch.label,
+        });
+      }
+    }
+    return out;
+  });
+
+  /** Latest pending lyric proposal for the Lyrics panel review surface. */
+  const latestPendingLyricPatch = computed(
+    () => pendingLyricPatches.value[pendingLyricPatches.value.length - 1] ?? null,
+  );
 
   const canUndoSoft = computed(() => usePatternStore().lastSoftPatches.length > 0);
 
@@ -154,6 +183,55 @@ export const useAssistantStore = defineStore('assistant', () => {
     composerDraft.value = prompt;
   }
 
+  async function bootstrapModel(): Promise<void> {
+    if (!window.mytunes) return;
+    try {
+      const settings = await window.mytunes.getSettings();
+      if (settings.flashModel?.trim()) selectedModel.value = settings.flashModel.trim();
+    } catch {
+      /* keep default */
+    }
+    await refreshChatModels();
+  }
+
+  async function refreshChatModels(force = false): Promise<void> {
+    if (!window.mytunes) return;
+    modelsLoading.value = true;
+    try {
+      const result = await window.mytunes.listChatModels({ force });
+      chatModels.value = result.models;
+      modelsCached.value = result.cached;
+      modelsFetchedAt.value = result.fetchedAt;
+      if (
+        selectedModel.value &&
+        result.models.length &&
+        !result.models.some((m) => m.id === selectedModel.value)
+      ) {
+        // Keep custom/settings id visible by injecting it.
+        chatModels.value = [
+          { id: selectedModel.value, displayName: selectedModel.value },
+          ...result.models,
+        ];
+      }
+    } catch (e) {
+      lastError.value = e instanceof Error ? e.message : String(e);
+    } finally {
+      modelsLoading.value = false;
+    }
+  }
+
+  async function setSelectedModel(modelId: string): Promise<void> {
+    const id = modelId.trim();
+    if (!id) return;
+    selectedModel.value = id;
+    if (!window.mytunes) return;
+    try {
+      await window.mytunes.setSettings({ flashModel: id });
+    } catch (e) {
+      lastError.value = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   function applyIncomingPatches(patches: AssistantPatch[]): {
     soft: SoftPatch[];
     hard: HardPatch[];
@@ -245,6 +323,7 @@ export const useAssistantStore = defineStore('assistant', () => {
         message: content,
         pattern: toIpcPayload(patternStore.pattern),
         history,
+        model: selectedModel.value,
       });
       budgetStore.applyBudget(result.budget);
       const { soft, hard } = applyIncomingPatches(result.patches);
@@ -283,8 +362,15 @@ export const useAssistantStore = defineStore('assistant', () => {
     busy,
     composerDraft,
     lastError,
+    selectedModel,
+    chatModels,
+    modelsLoading,
+    modelsCached,
+    modelsFetchedAt,
     activeConversation,
     messages,
+    pendingLyricPatches,
+    latestPendingLyricPatch,
     canUndoSoft,
     actionChips: ASSISTANT_ACTION_CHIPS,
     toggleOpen,
@@ -292,6 +378,9 @@ export const useAssistantStore = defineStore('assistant', () => {
     selectConversation,
     deleteActive,
     injectChip,
+    bootstrapModel,
+    refreshChatModels,
+    setSelectedModel,
     sendMessage,
     cancel,
     applyHardPatch,

@@ -1,7 +1,13 @@
 import { scoreLyricOverlap } from './compilePrompt';
 import type { GenerationRecord } from './generation';
 import { cleanReturnedLyrics, parseLyriaTranscript } from './lyriaTranscript';
-import type { Pattern } from './pattern';
+import { getCompositionMode, type Pattern } from './pattern';
+import {
+  defaultTimelineDuration,
+  parseDurationHintSeconds,
+  sortTimeline,
+  timelineTotalSec,
+} from './timeline';
 
 export type CoherenceSeverity = 'ok' | 'info' | 'warn' | 'bad';
 
@@ -41,7 +47,11 @@ function extractSections(text: string): string[] {
   const out: string[] = [];
   for (const line of text.split('\n')) {
     const m = line.match(SECTION_RE);
-    if (m?.[1]) out.push(`[${m[1].trim()}]`);
+    if (!m?.[1]) continue;
+    const body = m[1].trim();
+    // Voice assignment tags are not song structure.
+    if (/^voices?\s*:/i.test(body)) continue;
+    out.push(`[${body}]`);
   }
   return out;
 }
@@ -184,7 +194,7 @@ export function analyzeCoherence(
     });
   }
 
-  if (returnedLyrics) {
+  if (returnedLyrics && !song.auto?.structure) {
     const expected = song.structure.map(normalizeTag);
     const found = extractSections(returnedLyrics);
     const foundNorm = found.map(normalizeTag);
@@ -277,6 +287,112 @@ export function analyzeCoherence(
       title: 'Instrumental flag vs vocal return',
       detail: 'Pattern is marked instrumental but Lyria returned lyric text.',
     });
+  }
+
+  const compositionMode = getCompositionMode(snapshot ?? pattern);
+  if (compositionMode === 'timeline') {
+    const timeline = sortTimeline(song.timeline ?? []);
+    if (!timeline.length) {
+      findings.push({
+        id: 'timeline-empty',
+        severity: 'warn',
+        title: 'Timeline mode with no segments',
+        detail: 'Composition is timeline-first but the timeline is empty — derive from structure or ask the assistant to transpose.',
+      });
+    } else {
+      let overlapOrGap = false;
+      for (let i = 1; i < timeline.length; i++) {
+        const prev = timeline[i - 1]!;
+        const cur = timeline[i]!;
+        if (cur.startSec < prev.endSec - 0.05) overlapOrGap = true;
+        if (cur.startSec > prev.endSec + 0.5) overlapOrGap = true;
+      }
+      if (overlapOrGap) {
+        findings.push({
+          id: 'timeline-gaps',
+          severity: 'warn',
+          title: 'Timeline gaps or overlaps',
+          detail: 'Segments should be contiguous (or nearly so) without overlapping windows.',
+        });
+      }
+
+      for (const seg of timeline) {
+        if (seg.endSec <= seg.startSec) {
+          findings.push({
+            id: `timeline-bad-range-${seg.id}`,
+            severity: 'bad',
+            title: `Bad range: ${seg.label}`,
+            detail: 'endSec must be greater than startSec.',
+          });
+        }
+        if (seg.intensity < 1 || seg.intensity > 10) {
+          findings.push({
+            id: `timeline-intensity-${seg.id}`,
+            severity: 'warn',
+            title: `Intensity out of range: ${seg.label}`,
+            detail: 'Intensity should be 1–10 per the Lyria guide.',
+          });
+        }
+        if (!seg.direction.trim()) {
+          findings.push({
+            id: `timeline-direction-${seg.id}`,
+            severity: 'info',
+            title: `Empty direction: ${seg.label}`,
+            detail: 'Add a short musical direction so Lyria knows what happens in this window.',
+          });
+        }
+      }
+
+      const total = timelineTotalSec(timeline);
+      const cap = (snapshot?.lyriaMode ?? pattern.lyriaMode) === 'clip' ? 30 : 184;
+      const hintSec = parseDurationHintSeconds(
+        song.durationHint,
+        defaultTimelineDuration(snapshot ?? pattern),
+      );
+      if (total > cap + 1) {
+        findings.push({
+          id: 'timeline-over-cap',
+          severity: 'warn',
+          title: 'Timeline longer than mode cap',
+          detail: `Timeline spans ~${Math.round(total)}s; ${
+            (snapshot?.lyriaMode ?? pattern.lyriaMode) === 'clip' ? 'Clip' : 'Full'
+          } max is ~${cap}s.`,
+        });
+      } else if (Math.abs(total - hintSec) > Math.max(15, hintSec * 0.25)) {
+        findings.push({
+          id: 'timeline-vs-duration',
+          severity: 'info',
+          title: 'Timeline vs duration hint',
+          detail: `Timeline ~${Math.round(total)}s vs duration hint ~${hintSec}s.`,
+        });
+      }
+
+      if (!song.auto?.structure && song.structure.length) {
+        const labels = timeline.map((s) => normalizeTag(`[${s.label}]`));
+        const missing = song.structure.filter((tag) => {
+          const body = stripBrackets(normalizeTag(tag));
+          return !labels.some((l) => {
+            const lb = stripBrackets(l);
+            return lb.includes(body) || body.includes(lb);
+          });
+        });
+        if (missing.length) {
+          findings.push({
+            id: 'timeline-vs-structure',
+            severity: 'warn',
+            title: 'Timeline labels vs structure tags',
+            detail: `Structure tags not clearly in timeline: ${missing.join(', ')}.`,
+          });
+        }
+      } else {
+        findings.push({
+          id: 'timeline-ok',
+          severity: 'ok',
+          title: 'Timeline present',
+          detail: `${timeline.length} segments · ~${Math.round(total)}s`,
+        });
+      }
+    }
   }
 
   const rank: Record<CoherenceSeverity, number> = { bad: 0, warn: 1, info: 2, ok: 3 };

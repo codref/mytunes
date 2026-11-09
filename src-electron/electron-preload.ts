@@ -3,6 +3,7 @@ import { quasarRuntime } from '#q-app/electron/preload';
 import type { AssistantConversation, AssistantEvent } from '../src/models/assistant';
 import type { MytunesApi } from '../src/models/api';
 import type { Pattern } from '../src/models/pattern';
+import type { StudioPreset } from '../src/models/presets';
 import type { AppSettingsUpdate } from '../src/models/settings';
 import type { AppSession, Song } from '../src/models/song';
 
@@ -17,6 +18,8 @@ const mytunes: MytunesApi = {
   setSettings: (update: AppSettingsUpdate) =>
     ipcRenderer.invoke('mytunes:settings:set', cloneForIpc(update)),
   getPatternDefaults: () => ipcRenderer.invoke('mytunes:settings:patternDefaults'),
+  listChatModels: (opts) =>
+    ipcRenderer.invoke('mytunes:models:listChat', opts ? cloneForIpc(opts) : undefined),
   compilePrompt: (pattern) => ipcRenderer.invoke('mytunes:compilePrompt', cloneForIpc(pattern)),
   refinePrompt: (pattern) => ipcRenderer.invoke('mytunes:refinePrompt', cloneForIpc(pattern)),
   writeLyrics: (pattern) => ipcRenderer.invoke('mytunes:writeLyrics', cloneForIpc(pattern)),
@@ -29,10 +32,33 @@ const mytunes: MytunesApi = {
   checkBudget: (nextCost) => ipcRenderer.invoke('mytunes:budget:check', nextCost),
   listGenerations: (filter) =>
     ipcRenderer.invoke('mytunes:generations:list', filter ? cloneForIpc(filter) : undefined),
+  patchGeneration: (id, patch) =>
+    ipcRenderer.invoke('mytunes:generations:patch', id, cloneForIpc(patch)),
+  forkGeneration: (generationId, name) =>
+    ipcRenderer.invoke('mytunes:generations:fork', generationId, name),
+  exportVideo: (generationId) =>
+    ipcRenderer.invoke('mytunes:generations:exportVideo', generationId),
+  onExportVideoProgress: (handler) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: { generationId: string; percent: number | null; message: string },
+    ) => {
+      handler(payload);
+    };
+    ipcRenderer.on('mytunes:exportVideo:progress', listener);
+    return () => {
+      ipcRenderer.removeListener('mytunes:exportVideo:progress', listener);
+    };
+  },
+  revealInFolder: (filePath) => ipcRenderer.invoke('mytunes:revealInFolder', filePath),
   listSongs: () => ipcRenderer.invoke('mytunes:songs:list'),
   saveSong: (song: Song) => ipcRenderer.invoke('mytunes:songs:save', cloneForIpc(song)),
   loadSong: (id) => ipcRenderer.invoke('mytunes:songs:load', id),
   deleteSong: (id) => ipcRenderer.invoke('mytunes:songs:delete', id),
+  listPresets: () => ipcRenderer.invoke('mytunes:presets:list'),
+  savePreset: (preset: StudioPreset) =>
+    ipcRenderer.invoke('mytunes:presets:save', cloneForIpc(preset)),
+  deletePreset: (id) => ipcRenderer.invoke('mytunes:presets:delete', id),
   getSession: () => ipcRenderer.invoke('mytunes:session:get'),
   setSession: (update: Partial<AppSession>) =>
     ipcRenderer.invoke('mytunes:session:set', cloneForIpc(update)),

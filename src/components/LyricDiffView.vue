@@ -1,29 +1,61 @@
 <template>
   <div class="lyric-diff">
     <div class="lyric-diff__meta row items-center q-gutter-sm q-mb-sm">
-      <div class="mt-label">Compare with last take</div>
+      <div class="mt-label">{{ metaTitle }}</div>
       <q-badge v-if="overlapLabel" :color="overlapColor" text-color="dark">
         {{ overlapLabel }}
       </q-badge>
-      <q-space />
-      <q-btn
-        v-if="returnedClean"
-        flat
+      <q-btn-toggle
+        v-if="rightText"
+        v-model="viewLayout"
         dense
-        color="primary"
-        label="Adopt returned"
-        @click="emit('adopt', returnedClean)"
+        unelevated
+        toggle-color="primary"
+        toggle-text-color="dark"
+        text-color="grey-5"
+        size="sm"
+        :options="layoutOptions"
       />
+      <q-space />
+      <slot name="actions">
+        <q-btn
+          v-if="showAdopt && rightText"
+          flat
+          dense
+          color="primary"
+          label="Adopt returned"
+          @click="emit('adopt', rightText)"
+        />
+      </slot>
     </div>
 
-    <div v-if="!returnedClean" class="text-caption text-grey-5">
-      Generate a take to see Lyria’s returned lyrics beside your sheet.
+    <div v-if="!rightText" class="text-caption text-grey-5">
+      {{ emptyText }}
+    </div>
+
+    <div v-else-if="viewLayout === 'unified'" class="lyric-diff__unified">
+      <div class="lyric-diff__body" aria-label="Unified lyrics diff">
+        <template v-for="(block, idx) in unifiedBlocks" :key="`U-${idx}`">
+          <div class="lyric-diff__line lyric-diff__line--row" :class="block.lineClass">
+            <span class="lyric-diff__gutter" aria-hidden="true">{{ block.gutter }}</span>
+            <span class="lyric-diff__content" :class="{ 'lyric-diff__content--strike': block.strike }">
+              <span
+                v-for="(tok, tIdx) in block.tokens"
+                :key="tIdx"
+                :class="{ 'mt-diff-common': tok.common }"
+                >{{ tok.text }}</span
+              >
+              <span v-if="!block.tokens.length" class="lyric-diff__empty">&nbsp;</span>
+            </span>
+          </div>
+        </template>
+      </div>
     </div>
 
     <div v-else class="lyric-diff__grid">
       <div class="lyric-diff__col">
-        <div class="lyric-diff__head">Your sheet</div>
-        <div class="lyric-diff__body" aria-label="Source lyrics diff">
+        <div class="lyric-diff__head">{{ leftHeading }}</div>
+        <div class="lyric-diff__body" :aria-label="`${leftHeading} lyrics diff`">
           <div
             v-for="(row, idx) in rows"
             :key="`L-${idx}`"
@@ -44,8 +76,8 @@
       </div>
 
       <div class="lyric-diff__col">
-        <div class="lyric-diff__head">Lyria returned</div>
-        <div class="lyric-diff__body" aria-label="Returned lyrics diff">
+        <div class="lyric-diff__head">{{ rightHeading }}</div>
+        <div class="lyric-diff__body" :aria-label="`${rightHeading} lyrics diff`">
           <div
             v-for="(row, idx) in rows"
             :key="`R-${idx}`"
@@ -71,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   cleanReturnedLyrics,
   diffLyricLines,
@@ -81,28 +113,120 @@ import {
   type HighlightToken,
 } from '@/models/lyricDiff';
 
-const props = defineProps<{
-  sourceText: string;
-  returnedText: string;
-  overlapScore?: number | null;
-}>();
+type DiffLayout = 'unified' | 'side-by-side';
+
+type UnifiedBlock = {
+  gutter: string;
+  lineClass: string;
+  strike: boolean;
+  tokens: HighlightToken[];
+};
+
+const props = withDefaults(
+  defineProps<{
+    sourceText: string;
+    returnedText: string;
+    overlapScore?: number | null;
+    metaTitle?: string;
+    leftHeading?: string;
+    rightHeading?: string;
+    emptyText?: string;
+    /** When true, run cleanReturnedLyrics on the right side (Lyria take mode). */
+    cleanReturned?: boolean;
+    showAdopt?: boolean;
+    onlyLeftLabel?: string;
+    onlyRightLabel?: string;
+    layout?: DiffLayout;
+  }>(),
+  {
+    overlapScore: null,
+    metaTitle: 'Compare with last take',
+    leftHeading: 'Your sheet',
+    rightHeading: 'Lyria returned',
+    emptyText: 'Generate a take to see Lyria’s returned lyrics beside your sheet.',
+    cleanReturned: true,
+    showAdopt: true,
+    onlyLeftLabel: 'only in sheet',
+    onlyRightLabel: 'only in return',
+    layout: 'side-by-side',
+  },
+);
 
 const emit = defineEmits<{
   adopt: [lyrics: string];
 }>();
 
-const returnedClean = computed(() => cleanReturnedLyrics(props.returnedText || ''));
+const viewLayout = ref<DiffLayout>(props.layout);
+watch(
+  () => props.layout,
+  (next) => {
+    viewLayout.value = next;
+  },
+);
+
+const layoutOptions = [
+  { label: 'Inline', value: 'unified' },
+  { label: 'Side-by-side', value: 'side-by-side' },
+];
+
+const rightText = computed(() => {
+  const raw = props.returnedText || '';
+  if (props.cleanReturned) return cleanReturnedLyrics(raw);
+  return raw;
+});
 
 const rows = computed(() =>
-  returnedClean.value ? diffLyricLines(props.sourceText || '', returnedClean.value) : [],
+  rightText.value ? diffLyricLines(props.sourceText || '', rightText.value) : [],
 );
+
+const unifiedBlocks = computed((): UnifiedBlock[] => {
+  const blocks: UnifiedBlock[] = [];
+  for (const row of rows.value) {
+    if (row.kind === 'equal') {
+      blocks.push({
+        gutter: ' ',
+        lineClass: 'lyric-diff__line--equal',
+        strike: false,
+        tokens: highlightCommonWords(row.left, row.left).map((t) => ({ ...t, common: true })),
+      });
+    } else if (row.kind === 'remove') {
+      blocks.push({
+        gutter: '-',
+        lineClass: 'lyric-diff__line--remove',
+        strike: true,
+        tokens: highlightCommonWords(row.left, ''),
+      });
+    } else if (row.kind === 'add') {
+      blocks.push({
+        gutter: '+',
+        lineClass: 'lyric-diff__line--add',
+        strike: false,
+        tokens: highlightCommonWords(row.right, ''),
+      });
+    } else {
+      blocks.push({
+        gutter: '-',
+        lineClass: 'lyric-diff__line--remove',
+        strike: true,
+        tokens: highlightCommonWords(row.left, row.right),
+      });
+      blocks.push({
+        gutter: '+',
+        lineClass: 'lyric-diff__line--add',
+        strike: false,
+        tokens: highlightCommonWords(row.right, row.left),
+      });
+    }
+  }
+  return blocks;
+});
 
 const summary = computed(() => (rows.value.length ? diffSummary(rows.value) : null));
 
 const summaryText = computed(() => {
   const s = summary.value;
   if (!s) return '';
-  return `${s.equal} matching · ${s.changed} changed · ${s.onlyLeft} only in sheet · ${s.onlyRight} only in return`;
+  return `${s.equal} matching · ${s.changed} changed · ${s.onlyLeft} ${props.onlyLeftLabel} · ${s.onlyRight} ${props.onlyRightLabel}`;
 });
 
 const overlapLabel = computed(() => {
@@ -164,6 +288,10 @@ function tokensFor(row: DiffRow, side: 'left' | 'right'): HighlightToken[] {
   min-width: 0;
 }
 
+.lyric-diff__unified {
+  min-width: 0;
+}
+
 .lyric-diff__head {
   color: var(--mt-muted);
   font-size: 0.72rem;
@@ -183,8 +311,8 @@ function tokensFor(row: DiffRow, side: 'left' | 'right'): HighlightToken[] {
   overflow-x: hidden;
   overflow-y: auto;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .lyric-diff__line {
@@ -192,6 +320,31 @@ function tokensFor(row: DiffRow, side: 'left' | 'right'): HighlightToken[] {
   padding-left: 0.4rem;
   margin: 0.05rem 0;
   min-height: 1.2em;
+}
+
+/* Flex only for unified gutter + content — never wrap tokens as flex items. */
+.lyric-diff__line--row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.lyric-diff__gutter {
+  flex: 0 0 0.75rem;
+  color: var(--mt-muted);
+  user-select: none;
+}
+
+.lyric-diff__content {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.lyric-diff__content--strike {
+  text-decoration: line-through;
+  opacity: 0.85;
 }
 
 .lyric-diff__line--equal {

@@ -58,7 +58,6 @@ body,
   font-family: var(--mt-font-display);
   font-weight: 700;
   letter-spacing: 0.08em;
-  text-transform: lowercase;
   font-size: 1.35rem;
   color: var(--mt-accent);
 }
@@ -83,27 +82,92 @@ body,
   border-radius: 4px;
   background: #120f0c;
   overflow: hidden;
+  max-height: min(62vh, 640px);
+  overflow-y: auto;
 }
 
 .mt-version-item {
   border-left: 3px solid transparent;
-  min-height: 44px;
+  border-bottom: 1px solid var(--mt-line);
   color: var(--mt-text);
 }
 
+.mt-version-item:last-child {
+  border-bottom: none;
+}
+
 .mt-version-item:hover {
-  background: rgba(232, 160, 69, 0.08) !important;
+  background: rgba(232, 160, 69, 0.08);
 }
 
 .mt-version-item--active {
   border-left-color: var(--mt-accent);
-  background: rgba(232, 160, 69, 0.18) !important;
-  color: var(--mt-text);
+  background: rgba(232, 160, 69, 0.18);
 }
 
-.mt-version-item--active .mt-version-caption,
-.mt-version-item--active .q-item__label--caption {
-  color: var(--mt-accent-2) !important;
+.mt-version-item--expanded {
+  background: rgba(232, 160, 69, 0.1);
+}
+
+.mt-version-item--active .mt-version-caption {
+  color: var(--mt-accent-2);
+}
+
+.mt-version-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.mt-version-header:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.mt-version-header__main {
+  min-width: 0;
+  flex: 1;
+}
+
+.mt-version-title {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.mt-version-caption {
+  font-size: 12px;
+  color: rgba(232, 220, 200, 0.55);
+  margin-top: 2px;
+}
+
+.mt-version-notes-preview {
+  font-size: 11px;
+  color: rgba(232, 220, 200, 0.72);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mt-version-chevron {
+  color: rgba(232, 220, 200, 0.55);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.mt-version-body {
+  padding: 0 10px 10px;
 }
 
 .mt-panel {

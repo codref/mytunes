@@ -1,53 +1,59 @@
 <template>
   <div class="mt-knob-row">
-    <q-toggle
-      :model-value="slot.enabled"
-      color="primary"
-      :label="`${label} enabled`"
-      @update:model-value="(v) => patternStore.setSlotEnabled(slotId, v)"
-    />
+    <PresetBar kind="slot" :slot-id="slotId" :label="`${label} preset`" />
+    <VocalsPanel v-if="slotId === 'vocals'" />
+    <template v-else>
+      <q-toggle
+        :model-value="slot.enabled"
+        color="primary"
+        :label="`${label} enabled`"
+        @update:model-value="(v) => patternStore.setSlotEnabled(slotId, v)"
+      />
 
-    <template v-for="(value, key) in slot.knobs" :key="key">
-      <div v-if="typeof value === 'number'">
-        <div class="mt-label">{{ key }} {{ value }}</div>
-        <q-slider
-          :model-value="value"
-          :min="0"
-          :max="100"
-          color="primary"
+      <template v-for="(value, key) in slot.knobs" :key="key">
+        <div v-if="typeof value === 'number'">
+          <div class="mt-label">{{ key }} {{ value }}</div>
+          <q-slider
+            :model-value="value"
+            :min="0"
+            :max="100"
+            color="primary"
+            :disable="!slot.enabled"
+            label
+            @update:model-value="(v) => patternStore.setSlotKnob(slotId, key, Number(v))"
+          />
+        </div>
+        <q-input
+          v-else
+          :model-value="String(value)"
+          filled
+          dark
+          dense
+          :label="String(key)"
           :disable="!slot.enabled"
-          label
-          @update:model-value="(v) => patternStore.setSlotKnob(slotId, key, Number(v))"
+          @update:model-value="(v) => patternStore.setSlotKnob(slotId, key, String(v ?? ''))"
         />
-      </div>
+      </template>
+
       <q-input
-        v-else
-        :model-value="String(value)"
+        :model-value="slot.notes"
         filled
         dark
         dense
-        :label="String(key)"
+        type="textarea"
+        autogrow
+        label="Free-text notes"
         :disable="!slot.enabled"
-        @update:model-value="(v) => patternStore.setSlotKnob(slotId, key, String(v ?? ''))"
+        @update:model-value="(v) => patternStore.setSlotNotes(slotId, String(v ?? ''))"
       />
     </template>
-
-    <q-input
-      :model-value="slot.notes"
-      filled
-      dark
-      dense
-      type="textarea"
-      autogrow
-      label="Free-text notes"
-      :disable="!slot.enabled"
-      @update:model-value="(v) => patternStore.setSlotNotes(slotId, String(v ?? ''))"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import PresetBar from '@/components/PresetBar.vue';
+import VocalsPanel from '@/components/VocalsPanel.vue';
 import { getSlot, type BandSlotId } from '@/models/pattern';
 import { usePatternStore } from '@/stores/pattern';
 

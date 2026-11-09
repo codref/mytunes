@@ -4,13 +4,23 @@ import type { HardPatch, SoftPatch } from '@/models/assistant';
 import { compilePrompt } from '@/models/compilePrompt';
 import { toIpcPayload } from '@/models/ipc';
 import {
+  clampIntensity,
   createDefaultPattern,
+  createTimelineSegment,
+  createVocalVoice,
+  ensureVocalVoices,
   getSlot,
+  MAX_VOCAL_VOICES,
   normalizePattern,
+  syncLeadVoiceFromKnobs,
+  syncVocalKnobsFromLead,
   type BandSlotId,
   type LyriaMode,
   type Pattern,
+  type TimelineSegment,
+  type VocalVoice,
 } from '@/models/pattern';
+import { structureFromTimeline } from '@/models/timeline';
 
 export const usePatternStore = defineStore('pattern', () => {
   const pattern = ref<Pattern>(createDefaultPattern());
@@ -27,8 +37,13 @@ export const usePatternStore = defineStore('pattern', () => {
   });
 
   function recompileLocal() {
-    compiledPrompt.value = compilePrompt(pattern.value);
-    pattern.value.compiledPrompt = compiledPrompt.value;
+    const next = compilePrompt(pattern.value);
+    if (compiledPrompt.value !== next) compiledPrompt.value = next;
+    // Avoid writing onto the deeply-watched pattern when unchanged —
+    // that used to re-enter this watcher after normalize rebuilt timeline.
+    if (pattern.value.compiledPrompt !== next) {
+      pattern.value.compiledPrompt = next;
+    }
   }
 
   watch(
@@ -44,11 +59,48 @@ export const usePatternStore = defineStore('pattern', () => {
   }
 
   function setSlotKnob(id: BandSlotId, key: string, value: number | string | boolean) {
-    getSlot(pattern.value, id).knobs[key] = value;
+    const slot = getSlot(pattern.value, id);
+    slot.knobs[key] = value;
+    if (id === 'vocals') syncLeadVoiceFromKnobs(slot);
   }
 
   function setSlotNotes(id: BandSlotId, notes: string) {
     getSlot(pattern.value, id).notes = notes;
+  }
+
+  function setVocalVoices(voices: VocalVoice[]) {
+    const slot = getSlot(pattern.value, 'vocals');
+    slot.voices = voices.slice(0, MAX_VOCAL_VOICES);
+    ensureVocalVoices(slot);
+    syncVocalKnobsFromLead(slot);
+  }
+
+  function updateVocalVoice(voiceId: string, patch: Partial<VocalVoice>) {
+    const slot = getSlot(pattern.value, 'vocals');
+    ensureVocalVoices(slot);
+    const voice = slot.voices?.find((v) => v.id === voiceId);
+    if (!voice) return;
+    Object.assign(voice, patch);
+    syncVocalKnobsFromLead(slot);
+  }
+
+  function addVocalVoice(name?: string) {
+    const slot = getSlot(pattern.value, 'vocals');
+    ensureVocalVoices(slot);
+    if (!slot.voices || slot.voices.length >= MAX_VOCAL_VOICES) return;
+    const index = slot.voices.length + 1;
+    slot.voices.push(
+      createVocalVoice({
+        name: name?.trim() || (index === 2 ? 'Harmony' : `Voice ${index}`),
+      }),
+    );
+  }
+
+  function removeVocalVoice(voiceId: string) {
+    const slot = getSlot(pattern.value, 'vocals');
+    if (!slot.voices || slot.voices.length <= 1) return;
+    slot.voices = slot.voices.filter((v) => v.id !== voiceId);
+    syncVocalKnobsFromLead(slot);
   }
 
   function loadPattern(next: Pattern) {
@@ -116,6 +168,12 @@ export const usePatternStore = defineStore('pattern', () => {
       case 'song.durationHint':
         p.song.durationHint = String(patch.value);
         break;
+      case 'song.soundscape':
+        p.song.soundscape = String(patch.value);
+        break;
+      case 'song.productionQuality':
+        p.song.productionQuality = String(patch.value);
+        break;
       case 'slot.enabled':
         if (patch.slotId) setSlotEnabled(patch.slotId as BandSlotId, Boolean(patch.value));
         break;
@@ -131,6 +189,26 @@ export const usePatternStore = defineStore('pattern', () => {
           );
         }
         break;
+      case 'timeline.segment': {
+        if (!patch.segmentId || !patch.value || typeof patch.value !== 'object') break;
+        if (!p.song.timeline) p.song.timeline = [];
+        const seg = p.song.timeline.find((s) => s.id === patch.segmentId);
+        if (!seg) break;
+        Object.assign(seg, patch.value as Partial<TimelineSegment>);
+        if ((patch.value as Partial<TimelineSegment>).intensity != null) {
+          seg.intensity = clampIntensity(Number((patch.value as Partial<TimelineSegment>).intensity));
+        }
+        break;
+      }
+      case 'voice': {
+        if (!patch.voiceId || !patch.value || typeof patch.value !== 'object') break;
+        const slot = getSlot(p, 'vocals');
+        const voice = slot.voices?.find((v) => v.id === patch.voiceId);
+        if (!voice) break;
+        Object.assign(voice, patch.value as Partial<VocalVoice>);
+        syncVocalKnobsFromLead(slot);
+        break;
+      }
       default:
         break;
     }
@@ -164,6 +242,24 @@ export const usePatternStore = defineStore('pattern', () => {
         : [];
     } else if (patch.op === 'lyriaMode') {
       p.lyriaMode = patch.value === 'full' ? 'full' : 'clip';
+    } else if (patch.op === 'compositionMode') {
+      p.compositionMode = patch.value === 'timeline' ? 'timeline' : 'sections';
+    } else if (patch.op === 'timeline') {
+      const raw = Array.isArray(patch.value) ? (patch.value as Partial<TimelineSegment>[]) : [];
+      p.song.timeline = raw.map((s) => {
+        const partial: Partial<TimelineSegment> = {
+          startSec: Number(s.startSec) || 0,
+          endSec: Number(s.endSec) || 0,
+          label: String(s.label ?? 'Section'),
+          direction: String(s.direction ?? ''),
+          intensity: clampIntensity(Number(s.intensity) || 3),
+        };
+        if (typeof s.id === 'string' && s.id) partial.id = s.id;
+        return createTimelineSegment(partial);
+      });
+      p.compositionMode = 'timeline';
+      const derived = structureFromTimeline(p.song.timeline);
+      if (derived.length) p.song.structure = derived;
     }
   }
 
@@ -227,6 +323,10 @@ export const usePatternStore = defineStore('pattern', () => {
     setSlotEnabled,
     setSlotKnob,
     setSlotNotes,
+    setVocalVoices,
+    updateVocalVoice,
+    addVocalVoice,
+    removeVocalVoice,
     loadPattern,
     bootstrapFromSettings,
     resetPattern,

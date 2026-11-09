@@ -8,10 +8,16 @@ import type {
 import {
   BAND_SLOT_IDS,
   DEFAULT_TIME_SIGNATURE,
+  LYRIA_LANGUAGES,
   TIME_SIGNATURES,
+  clampIntensity,
+  createTimelineSegment,
+  getCompositionMode,
   type BandSlotId,
   type Pattern,
+  type TimelineSegment,
 } from '../../src/models/pattern';
+import { defaultTimelineDuration, describeSongForTranspose } from '../../src/models/timeline';
 import {
   estimateFlashCost,
   getClient,
@@ -25,8 +31,12 @@ const SYSTEM_PROMPT = `You are the mytunes studio co-pilot. Users describe a son
 
 Rules:
 - Prefer calling tools to update the live Pattern. Explain musical intent in plain language after tools run.
-- Use update_song / update_slot for soft adjustments (genre, mood, BPM, time signature, key, energy, instruments).
+- Use update_song / update_slot / update_voice for soft adjustments (genre, mood, BPM, meter, key, energy, soundscape, production, instruments, vocal gender/range/timbre).
 - Use set_structure, set_lyrics, or set_lyria_mode when proposing structure, lyrics, or clip/full mode — these need user confirmation in the UI.
+- Composition modes: "sections" (default lyric tags) vs "timeline" (timed [mm:ss] segments with Intensity 1–10).
+- When compositionMode is "timeline", prefer set_timeline / update_timeline_segment / transpose_to_timeline. Treat section structure as derived from timeline labels. Do not fight the timeline with set_structure unless the user asks.
+- When compositionMode is "sections", prefer set_structure. Offer transpose_to_timeline when the user wants timed arrangement control.
+- Languages must be one of: ${LYRIA_LANGUAGES.join(', ')}.
 - Pick concrete values (e.g. bpm 118, timeSignature "4/4", energy 70, groove "shuffled"), not vague prose in knobs.
 - Never name real artists, bands, or songs in knobs, notes, lyrics, or genre — Lyria blocks those prompts.
 - When drafting lyrics, respect the song time signature and BPM (line length / stress); give a clear theme/story; Lyria may adapt wording slightly — keep strong hooks and section tags.
@@ -34,6 +44,19 @@ Rules:
 - Never generate audio or claim you called Lyria. The user owns Generate.
 - Keep answers concise (a few sentences). Do not dump full JSON unless asked.
 - Current Pattern JSON is provided each turn — ground your changes in it.`;
+
+const TIMELINE_SEGMENT_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    id: { type: Type.STRING },
+    startSec: { type: Type.NUMBER },
+    endSec: { type: Type.NUMBER },
+    label: { type: Type.STRING },
+    direction: { type: Type.STRING },
+    intensity: { type: Type.NUMBER, description: '1–10' },
+  },
+  required: ['startSec', 'endSec', 'label', 'intensity'],
+};
 
 const TOOLS: FunctionDeclaration[] = [
   {
@@ -52,9 +75,20 @@ const TOOLS: FunctionDeclaration[] = [
         },
         key: { type: Type.STRING, description: 'e.g. G major, A minor' },
         energy: { type: Type.NUMBER, description: '0–100' },
-        language: { type: Type.STRING },
+        language: {
+          type: Type.STRING,
+          description: `One of: ${LYRIA_LANGUAGES.join(', ')}`,
+        },
         instrumental: { type: Type.BOOLEAN },
         durationHint: { type: Type.STRING, description: 'Hint for full-song mode' },
+        soundscape: {
+          type: Type.STRING,
+          description: 'Ambient / sonic environment e.g. rain, spacious reverb',
+        },
+        productionQuality: {
+          type: Type.STRING,
+          description: 'Mix character e.g. clean mix, vintage recording',
+        },
       },
     },
   },
@@ -80,8 +114,37 @@ const TOOLS: FunctionDeclaration[] = [
     },
   },
   {
+    name: 'update_voice',
+    description:
+      'Update one vocal voice (gender, range, timbre, style, delivery, presence, notes, name). Soft / auto-applied. Use voiceId from Pattern JSON, or omit to update the lead (first) voice.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        voiceId: { type: Type.STRING, description: 'Voice id; omit for lead/first voice' },
+        name: { type: Type.STRING },
+        style: { type: Type.STRING },
+        gender: {
+          type: Type.STRING,
+          enum: ['female', 'male', 'neutral', 'unspecified'],
+          description: 'Singer gender / presentation (unspecified = leave blank)',
+        },
+        range: {
+          type: Type.STRING,
+          description: 'baritone | tenor | alto | mezzo | soprano | low | mid | high',
+        },
+        timbre: {
+          type: Type.STRING,
+          description: 'e.g. breathy, soulful, gravelly, clear, sweet',
+        },
+        delivery: { type: Type.STRING },
+        presence: { type: Type.NUMBER, description: '0–100' },
+        notes: { type: Type.STRING },
+      },
+    },
+  },
+  {
     name: 'set_structure',
-    description: 'Propose a full song structure (requires user Apply).',
+    description: 'Propose a full song structure (requires user Apply). Prefer when compositionMode is sections.',
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -92,6 +155,67 @@ const TOOLS: FunctionDeclaration[] = [
         },
       },
       required: ['structure'],
+    },
+  },
+  {
+    name: 'set_composition_mode',
+    description: 'Propose sections vs timeline composition (requires user Apply).',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        mode: { type: Type.STRING, enum: ['sections', 'timeline'] },
+      },
+      required: ['mode'],
+    },
+  },
+  {
+    name: 'set_timeline',
+    description:
+      'Propose a full timed timeline (requires Apply). Switches to timeline mode. Prefer when compositionMode is timeline or user wants timed arrangement.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        segments: {
+          type: Type.ARRAY,
+          items: TIMELINE_SEGMENT_SCHEMA,
+          description: 'Ordered timeline segments with startSec/endSec/label/direction/intensity',
+        },
+      },
+      required: ['segments'],
+    },
+  },
+  {
+    name: 'transpose_to_timeline',
+    description:
+      'Read live song settings and propose a coherent timeline (requires Apply). Use when the user asks to transpose configuration into timed segments.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        segments: {
+          type: Type.ARRAY,
+          items: TIMELINE_SEGMENT_SCHEMA,
+          description:
+            'Full timeline derived from genre/mood/BPM/meter/structure/duration/energy/instruments',
+        },
+        notes: { type: Type.STRING, description: 'Brief rationale' },
+      },
+      required: ['segments'],
+    },
+  },
+  {
+    name: 'update_timeline_segment',
+    description: 'Soft-update one timeline segment (intensity/direction/label/times). Auto-applied.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        startSec: { type: Type.NUMBER },
+        endSec: { type: Type.NUMBER },
+        label: { type: Type.STRING },
+        direction: { type: Type.STRING },
+        intensity: { type: Type.NUMBER },
+      },
+      required: ['id'],
     },
   },
   {
@@ -128,6 +252,8 @@ export interface AssistantTurnInput {
   message: string;
   pattern: Pattern;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Override settings flash model for this turn. */
+  model?: string;
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
 }
@@ -190,8 +316,31 @@ function normalizeTimeSignature(raw: string): string {
   return DEFAULT_TIME_SIGNATURE;
 }
 
+function normalizeLanguageArg(raw: string): string {
+  const exact = (LYRIA_LANGUAGES as readonly string[]).find(
+    (l) => l.toLowerCase() === raw.trim().toLowerCase(),
+  );
+  return exact ?? 'English';
+}
+
 function isSlotId(id: string): id is BandSlotId {
   return (BAND_SLOT_IDS as string[]).includes(id);
+}
+
+function parseSegments(raw: unknown): TimelineSegment[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    const s = (item && typeof item === 'object' ? item : {}) as Partial<TimelineSegment>;
+    const partial: Partial<TimelineSegment> = {
+      startSec: Number(s.startSec) || 0,
+      endSec: Number(s.endSec) || 0,
+      label: String(s.label ?? 'Section'),
+      direction: String(s.direction ?? ''),
+      intensity: clampIntensity(Number(s.intensity) || 3),
+    };
+    if (typeof s.id === 'string' && s.id) partial.id = s.id;
+    return createTimelineSegment(partial);
+  });
 }
 
 function executeTool(
@@ -200,9 +349,18 @@ function executeTool(
   pattern: Pattern,
 ): { result: Record<string, unknown>; patches: AssistantPatch[] } {
   const patches: AssistantPatch[] = [];
+  const compositionMode = getCompositionMode(pattern);
 
   if (name === 'read_pattern') {
-    return { result: { pattern }, patches };
+    return {
+      result: {
+        pattern,
+        compositionMode,
+        transposeHints: describeSongForTranspose(pattern.song),
+        suggestedDurationSec: defaultTimelineDuration(pattern),
+      },
+      patches,
+    };
   }
 
   if (name === 'update_song') {
@@ -253,12 +411,13 @@ function executeTool(
       applied.push('energy');
     }
     if (typeof args.language === 'string') {
+      const language = normalizeLanguageArg(args.language);
       patches.push(
         soft(
           'song.language',
           'song.language',
-          args.language,
-          `Language → ${args.language}`,
+          language,
+          `Language → ${language}`,
           pattern.song.language,
         ),
       );
@@ -287,6 +446,30 @@ function executeTool(
         ),
       );
       applied.push('durationHint');
+    }
+    if (typeof args.soundscape === 'string') {
+      patches.push(
+        soft(
+          'song.soundscape',
+          'song.soundscape',
+          args.soundscape,
+          `Soundscape → ${args.soundscape}`,
+          pattern.song.soundscape,
+        ),
+      );
+      applied.push('soundscape');
+    }
+    if (typeof args.productionQuality === 'string') {
+      patches.push(
+        soft(
+          'song.productionQuality',
+          'song.productionQuality',
+          args.productionQuality,
+          `Production → ${args.productionQuality}`,
+          pattern.song.productionQuality,
+        ),
+      );
+      applied.push('productionQuality');
     }
     return { result: { ok: true, applied }, patches };
   }
@@ -336,7 +519,85 @@ function executeTool(
     return { result: { ok: true, slot: id, applied }, patches };
   }
 
+  if (name === 'update_voice') {
+    const vocals = pattern.slots.find((s) => s.id === 'vocals');
+    if (!vocals?.voices?.length) {
+      return { result: { ok: false, error: 'No vocal voices on pattern' }, patches };
+    }
+    const voiceId =
+      typeof args.voiceId === 'string' && args.voiceId.trim()
+        ? args.voiceId.trim()
+        : vocals.voices[0]!.id;
+    const voice = vocals.voices.find((v) => v.id === voiceId);
+    if (!voice) {
+      return { result: { ok: false, error: `Unknown voice ${voiceId}` }, patches };
+    }
+    const next: Record<string, unknown> = {};
+    const applied: string[] = [];
+    if (typeof args.name === 'string') {
+      next.name = args.name;
+      applied.push('name');
+    }
+    if (typeof args.style === 'string') {
+      next.style = args.style;
+      applied.push('style');
+    }
+    if (typeof args.gender === 'string') {
+      next.gender = args.gender === 'unspecified' ? '' : args.gender;
+      applied.push('gender');
+    }
+    if (typeof args.range === 'string') {
+      next.range = args.range;
+      applied.push('range');
+    }
+    if (typeof args.timbre === 'string') {
+      next.timbre = args.timbre;
+      applied.push('timbre');
+    }
+    if (typeof args.delivery === 'string') {
+      next.delivery = args.delivery;
+      applied.push('delivery');
+    }
+    if (typeof args.presence === 'number') {
+      next.presence = Math.max(0, Math.min(100, Math.round(args.presence)));
+      applied.push('presence');
+    }
+    if (typeof args.notes === 'string') {
+      next.notes = args.notes;
+      applied.push('notes');
+    }
+    if (!applied.length) {
+      return { result: { ok: false, error: 'No voice fields to update' }, patches };
+    }
+    const previous: Record<string, unknown> = {};
+    const voiceRec = voice as unknown as Record<string, unknown>;
+    for (const key of applied) {
+      previous[key] = voiceRec[key];
+    }
+    patches.push(
+      soft(
+        'voice',
+        `slots.vocals.voices.${voiceId}`,
+        next,
+        `Voice ${voice.name}: ${applied.join(', ')}`,
+        previous,
+        { voiceId, slotId: 'vocals' },
+      ),
+    );
+    return { result: { ok: true, voiceId, applied }, patches };
+  }
+
   if (name === 'set_structure') {
+    if (compositionMode === 'timeline') {
+      return {
+        result: {
+          ok: false,
+          error:
+            'Pattern is in timeline mode — use set_timeline or update_timeline_segment instead of set_structure.',
+        },
+        patches,
+      };
+    }
     const structure = Array.isArray(args.structure)
       ? args.structure.map((s) => String(s)).filter(Boolean)
       : [];
@@ -345,6 +606,63 @@ function executeTool(
     }
     patches.push(hard('structure', structure, `Structure → ${structure.join(' → ')}`));
     return { result: { ok: true, pendingConfirm: true, structure }, patches };
+  }
+
+  if (name === 'set_composition_mode') {
+    const mode = args.mode === 'timeline' ? 'timeline' : args.mode === 'sections' ? 'sections' : null;
+    if (!mode) {
+      return { result: { ok: false, error: 'mode must be sections or timeline' }, patches };
+    }
+    patches.push(hard('compositionMode', mode, `Composition → ${mode}`));
+    return { result: { ok: true, pendingConfirm: true, mode }, patches };
+  }
+
+  if (name === 'set_timeline' || name === 'transpose_to_timeline') {
+    const segments = parseSegments(args.segments);
+    if (!segments.length) {
+      return { result: { ok: false, error: 'Empty timeline segments' }, patches };
+    }
+    const label =
+      name === 'transpose_to_timeline'
+        ? `Transpose → timeline (${segments.length} segments)`
+        : `Timeline → ${segments.length} segments`;
+    patches.push(hard('timeline', segments, label));
+    if (typeof args.notes === 'string' && args.notes.trim()) {
+      return {
+        result: { ok: true, pendingConfirm: true, segmentCount: segments.length, notes: args.notes },
+        patches,
+      };
+    }
+    return { result: { ok: true, pendingConfirm: true, segmentCount: segments.length }, patches };
+  }
+
+  if (name === 'update_timeline_segment') {
+    const id = typeof args.id === 'string' ? args.id : '';
+    const list = pattern.song.timeline ?? [];
+    const seg = list.find((s) => s.id === id);
+    if (!seg) {
+      return { result: { ok: false, error: `Unknown segment ${id}` }, patches };
+    }
+    const next: Partial<TimelineSegment> = {};
+    if (typeof args.startSec === 'number') next.startSec = args.startSec;
+    if (typeof args.endSec === 'number') next.endSec = args.endSec;
+    if (typeof args.label === 'string') next.label = args.label;
+    if (typeof args.direction === 'string') next.direction = args.direction;
+    if (typeof args.intensity === 'number') next.intensity = clampIntensity(args.intensity);
+    if (!Object.keys(next).length) {
+      return { result: { ok: false, error: 'No segment fields to update' }, patches };
+    }
+    patches.push(
+      soft(
+        'timeline.segment',
+        `song.timeline.${id}`,
+        next,
+        `Segment ${seg.label} updated`,
+        { ...seg },
+        { segmentId: id },
+      ),
+    );
+    return { result: { ok: true, id, applied: Object.keys(next) }, patches };
   }
 
   if (name === 'set_lyrics') {
@@ -380,11 +698,15 @@ function historyToContents(
       parts: [{ text: turn.content }],
     });
   }
+  const modeNote =
+    getCompositionMode(pattern) === 'timeline'
+      ? '\nNote: compositionMode is timeline — prefer timeline tools.'
+      : '\nNote: compositionMode is sections — prefer set_structure unless user asks for a timeline.';
   contents.push({
     role: 'user',
     parts: [
       {
-        text: `${userMessage}\n\n---\nCurrent Pattern JSON:\n${JSON.stringify(pattern, null, 2)}`,
+        text: `${userMessage}\n\n---\nCurrent Pattern JSON:\n${JSON.stringify(pattern, null, 2)}${modeNote}`,
       },
     ],
   });
@@ -416,7 +738,7 @@ function usageFromResponse(usageMeta: {
 
 export async function runAssistantTurn(input: AssistantTurnInput): Promise<AssistantTurnResult> {
   const ai = getClient();
-  const model = resolveFlashModel();
+  const model = (input.model?.trim() || resolveFlashModel()).trim();
   const patches: AssistantPatch[] = [];
   let costUsd = 0;
 
