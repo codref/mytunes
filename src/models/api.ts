@@ -12,6 +12,7 @@ import type { Pattern } from './pattern';
 import type { StudioPreset } from './presets';
 import type { AppSettingsPublic, AppSettingsUpdate, PatternDefaults } from './settings';
 import type { AppSession, Song } from './song';
+import type { VideoExportOptions } from './videoExport';
 
 export interface PurposeBackendStatus {
   present: boolean;
@@ -91,12 +92,19 @@ export interface MytunesApi {
     generationId: string,
     name: string,
   ) => Promise<{ song: Song; generation: GenerationRecord }>;
-  exportVideo: (generationId: string) => Promise<{
+  exportVideo: (
+    generationId: string,
+    options?: Partial<VideoExportOptions>,
+  ) => Promise<{
     mp4Path: string;
     srtPath: string;
     durationSec: number;
     cueCount: number;
   }>;
+  /** Native open dialog → image path + data URL for preview. */
+  pickImageFile: () => Promise<
+    { canceled: true } | { canceled: false; path: string; dataUrl: string }
+  >;
   /** Native save dialog → pack one history take as a .tune ZIP. */
   exportTuneGeneration: (
     generationId: string,
@@ -116,6 +124,11 @@ export interface MytunesApi {
   saveSong: (song: Song) => Promise<Song>;
   loadSong: (id: string) => Promise<Song | null>;
   deleteSong: (id: string) => Promise<{ ok: boolean }>;
+  /** Persist a square JPEG cover (raw base64 or data URL) for the song. */
+  setSongCover: (songId: string, jpegBase64: string) => Promise<Song>;
+  clearSongCover: (songId: string) => Promise<Song>;
+  /** Copy cover from one song id to another (Save as / fork helpers). */
+  copySongCover: (fromSongId: string, toSongId: string) => Promise<Song | null>;
   /** Native save dialog → pack song + all takes into a .tune ZIP. */
   exportTune: (
     songId: string,

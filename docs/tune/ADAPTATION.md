@@ -18,11 +18,11 @@ People do not all want the same mix, tempo, or emotional intensity. Generative a
 └─────────────┘
 ```
 
-1. **Load** — parse `song.json`, rights, optional takes.
+1. **Load** — parse `song.json`, rights, optional takes and cover.
 2. **Decide** — if a faithful take matches the profile closely enough, play it.
 3. **Adapt** — otherwise patch allowed knobs (energy, mood hints, slot intensity, language when licensed/supported), recompile prompt, regenerate.
-4. **Attribute** — display composer / license / made-by from the archive.
-5. **Optionally fork** — write a new `.tune` for the adapted pattern under a compatible license.
+4. **Attribute** — display composer / license / made-by from the archive; MAY show `cover.jpg` as artwork.
+5. **Optionally fork** — write a new `.tune` for the adapted pattern under a compatible license (preserve cover when present).
 
 ## What may be adapted (informative)
 

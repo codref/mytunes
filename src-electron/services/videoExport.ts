@@ -9,16 +9,13 @@ import {
   type CaptionCue,
 } from '../../src/models/captionCues';
 import type { GenerationRecord } from '../../src/models/generation';
+import {
+  normalizeVideoExportOptions,
+  type VideoExportOptions,
+} from '../../src/models/videoExport';
 import { findGenerationById, getGenerationAudioPath } from './generationStore';
 
 const require = createRequire(import.meta.url);
-
-const WIDTH = 1920;
-const HEIGHT = 1080;
-const FPS = 30;
-/** Soft dual-tone stroke — stereo channels map to sky / cyan. */
-const WAVE_COLORS = '0x7dd3fc|0x38bdf8';
-const BG_COLOR = '0x0a0a12';
 
 export interface VideoExportResult {
   mp4Path: string;
@@ -124,11 +121,89 @@ function runFfmpeg(
   });
 }
 
+function ffmpegColor(hex: string): string {
+  const h = hex.replace(/^#/, '').toLowerCase();
+  return `0x${h}`;
+}
+
 /**
- * Export a polished centered-line waveform MP4 + sidecar SRT for a generation.
+ * Build ffmpeg filter chain that frames a still into WxH with fit/zoom/pan.
+ * Input label: [0:v] → output label: [bg]
+ */
+function buildImageBgFilter(opts: VideoExportOptions): string {
+  const { width: W, height: H } = opts;
+  const zoom = Math.max(1, opts.imageZoom / 100);
+  const padColor = ffmpegColor(opts.backgroundColor);
+
+  if (opts.imageFit === 'stretch') {
+    return `[0:v]scale=${W}:${H}:flags=lanczos,setsar=1,fps=${opts.fps},format=rgba[bg]`;
+  }
+
+  if (opts.imageFit === 'contain') {
+    // Scale to fit * zoom, then pad to canvas; pan shifts pad offsets.
+    const panX = opts.imagePanX / 100;
+    const panY = opts.imagePanY / 100;
+    // pad x/y: center ± pan * leftover. Use expressions evaluated by ffmpeg.
+    const xExpr = `(ow-iw)/2*(1+${panX.toFixed(4)})`;
+    const yExpr = `(oh-ih)/2*(1+${panY.toFixed(4)})`;
+    return [
+      `[0:v]scale=${W}*${zoom.toFixed(4)}:${H}*${zoom.toFixed(4)}:force_original_aspect_ratio=decrease:flags=lanczos`,
+      `pad=${W}:${H}:${xExpr}:${yExpr}:color=${padColor}`,
+      `setsar=1,fps=${opts.fps},format=rgba[bg]`,
+    ].join(',');
+  }
+
+  // Cover: scale to fill * zoom, crop WxH with pan within excess.
+  const panX = opts.imagePanX / 100;
+  const panY = opts.imagePanY / 100;
+  const xExpr = `(iw-ow)/2*(1+${panX.toFixed(4)})`;
+  const yExpr = `(ih-oh)/2*(1+${panY.toFixed(4)})`;
+  return [
+    `[0:v]scale=${W}*${zoom.toFixed(4)}:${H}*${zoom.toFixed(4)}:force_original_aspect_ratio=increase:flags=lanczos`,
+    `crop=${W}:${H}:${xExpr}:${yExpr}`,
+    `setsar=1,fps=${opts.fps},format=rgba[bg]`,
+  ].join(',');
+}
+
+function buildFilterComplex(opts: VideoExportOptions, useImage: boolean): string {
+  const { width: W, height: H, fps } = opts;
+  const parts: string[] = [];
+
+  if (useImage) {
+    parts.push(buildImageBgFilter(opts));
+  } else {
+    // Solid lavfi color is already W×H; just tag it [bg].
+    parts.push(`[0:v]format=rgba[bg]`);
+  }
+
+  if (!opts.showWaveform) {
+    parts.push(`[bg]format=yuv420p[v]`);
+    return parts.join(';');
+  }
+
+  const waveH = Math.max(2, Math.round(H * opts.waveformHeight));
+  const evenWaveH = waveH % 2 === 0 ? waveH : waveH + 1;
+  const colors = `${ffmpegColor(opts.waveformColorLeft)}|${ffmpegColor(opts.waveformColorRight)}`;
+  const opacity = opts.waveformOpacity;
+
+  const waveFilters = [
+    `showwaves=s=${W}x${evenWaveH}:mode=${opts.waveformMode}:colors=${colors}:scale=sqrt:rate=${fps}:draw=full`,
+    'format=rgba',
+  ];
+  if (opacity < 0.999) {
+    waveFilters.push(`colorchannelmixer=aa=${opacity.toFixed(3)}`);
+  }
+  parts.push(`[1:a]${waveFilters.join(',')}[wave]`);
+  parts.push(`[bg][wave]overlay=0:(H-h)/2:format=auto,format=yuv420p[v]`);
+  return parts.join(';');
+}
+
+/**
+ * Export a waveform MP4 (+ optional sidecar SRT) for a generation.
  */
 export async function exportGenerationVideo(
   generationId: string,
+  options?: Partial<VideoExportOptions> | null,
   onProgress?: VideoExportProgress,
 ): Promise<VideoExportResult> {
   const generation = findGenerationById(generationId);
@@ -138,6 +213,12 @@ export async function exportGenerationVideo(
   const audioPath = getGenerationAudioPath(generationId);
   if (!audioPath) {
     throw new Error('Audio file missing for this version');
+  }
+
+  const opts = normalizeVideoExportOptions(options);
+  const useImage = opts.background === 'image' && Boolean(opts.imagePath);
+  if (useImage && opts.imagePath && !fs.existsSync(opts.imagePath)) {
+    throw new Error(`Background image not found: ${opts.imagePath}`);
   }
 
   onProgress?.(null, 'Preparing export…');
@@ -157,31 +238,34 @@ export async function exportGenerationVideo(
   const mp4Path = path.join(outDir, `${baseName}.mp4`);
   const srtPath = path.join(outDir, `${baseName}.srt`);
 
-  fs.writeFileSync(srtPath, srtBody || '', 'utf8');
+  if (opts.writeSrt) {
+    fs.writeFileSync(srtPath, srtBody || '', 'utf8');
+  } else if (fs.existsSync(srtPath)) {
+    // Leave any prior sibling alone; only write when requested.
+  }
 
-  // Dark canvas + centered cline waveform (stereo dual-tone). Title skipped:
-  // this ffmpeg-static build has no drawtext filter.
-  const filterComplex = [
-    `[1:a]showwaves=s=${WIDTH}x${Math.round(HEIGHT * 0.5)}:mode=cline:colors=${WAVE_COLORS}:scale=sqrt:rate=${FPS}:draw=full,format=rgba[wave]`,
-    `[0:v][wave]overlay=0:(H-h)/2:format=auto,format=yuv420p[v]`,
-  ].join(';');
+  const filterComplex = buildFilterComplex(opts, useImage);
+  const bgColor = ffmpegColor(opts.backgroundColor);
 
   onProgress?.(0, 'Rendering waveform…');
 
-  const args = [
-    '-y',
-    '-f',
-    'lavfi',
-    '-i',
-    `color=c=${BG_COLOR}:s=${WIDTH}x${HEIGHT}:r=${FPS}`,
-    '-i',
-    audioPath,
-    '-filter_complex',
-    filterComplex,
-    '-map',
-    '[v]',
-    '-map',
-    '1:a',
+  const args: string[] = ['-y'];
+
+  if (useImage && opts.imagePath) {
+    args.push('-loop', '1', '-i', opts.imagePath);
+  } else {
+    args.push(
+      '-f',
+      'lavfi',
+      '-i',
+      `color=c=${bgColor}:s=${opts.width}x${opts.height}:r=${opts.fps}`,
+    );
+  }
+
+  args.push('-i', audioPath);
+  args.push('-filter_complex', filterComplex);
+  args.push('-map', '[v]', '-map', '1:a');
+  args.push(
     '-c:v',
     'libx264',
     '-preset',
@@ -198,7 +282,7 @@ export async function exportGenerationVideo(
     '-movflags',
     '+faststart',
     mp4Path,
-  ];
+  );
 
   await runFfmpeg(ffmpegBin, args, durationSec, onProgress);
 
@@ -208,9 +292,9 @@ export async function exportGenerationVideo(
 
   return {
     mp4Path,
-    srtPath,
+    srtPath: opts.writeSrt ? srtPath : '',
     durationSec,
-    cueCount: cues.length,
+    cueCount: opts.writeSrt ? cues.length : 0,
   };
 }
 

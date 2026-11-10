@@ -19,6 +19,7 @@ SHOULD:
 1. Normalize pattern fields (defaults for missing legacy data).
 2. Keep rights out of the compiled generator prompt.
 3. Set `madeBy` honestly (`human` / `ai` / `both`).
+4. When the song has artwork, include root `cover.jpg` (square JPEG preferred) and set `manifest.cover`.
 
 ## Reader (inspect / library import)
 
@@ -32,11 +33,13 @@ SHOULD:
 
 1. Remap `activeGenerationId` through the id map.
 2. Preserve unknown JSON fields when rewriting `song.json`.
+3. Import and preserve `cover.jpg` (or `manifest.cover`) under the new song id.
 
 MAY:
 
 1. Play included MP3s without understanding knobs.
 2. Ignore `generations/` entirely and only load source.
+3. Ignore cover artwork.
 
 ## Adapter (taste / regenerate)
 
@@ -63,3 +66,4 @@ MUST NOT:
 - [ ] Dual: secondary id + file both present or both absent
 - [ ] Import twice → two distinct library songs
 - [ ] Optional: play at least one included take
+- [ ] Optional: cover present → import shows artwork; export round-trips `cover.jpg`

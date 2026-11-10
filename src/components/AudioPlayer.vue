@@ -1,6 +1,42 @@
 <template>
-  <div class="mt-panel q-pa-md">
-    <div class="mt-label q-mb-sm">Player</div>
+  <div
+    class="mt-panel q-pa-md audio-player"
+    :class="{ 'audio-player--has-cover': Boolean(coverUrl) }"
+  >
+    <div
+      v-if="coverUrl"
+      class="audio-player__cover"
+      :style="{ backgroundImage: `url(${coverUrl})` }"
+      aria-hidden="true"
+    />
+    <div v-if="coverUrl" class="audio-player__scrim" aria-hidden="true" />
+    <div class="audio-player__content">
+    <div class="row items-center q-mb-sm">
+      <div class="mt-label">Player</div>
+      <q-space />
+      <q-btn
+        flat
+        dense
+        size="sm"
+        color="grey-4"
+        icon="image"
+        :label="coverUrl ? 'Change cover' : 'Set cover'"
+        :disable="coverBusy"
+        @click="coverDialogOpen = true"
+      />
+      <q-btn
+        v-if="coverUrl"
+        flat
+        dense
+        size="sm"
+        color="grey-5"
+        icon="hide_image"
+        label="Clear"
+        :loading="coverBusy"
+        class="q-ml-xs"
+        @click="onClearCover"
+      />
+    </div>
     <div v-if="!currentGeneration" class="text-grey-5 text-caption">
       Generate to create a version of this song.
     </div>
@@ -47,7 +83,7 @@
               </q-item-section>
               <q-item-section>
                 <q-item-label>Export video</q-item-label>
-                <q-item-label caption>Waveform MP4 + SRT</q-item-label>
+                <q-item-label caption>MP4 options + SRT</q-item-label>
               </q-item-section>
             </q-item>
           </q-list>
@@ -62,7 +98,7 @@
       >
         Exported
         <span class="text-grey-4">{{ basename(lastExport.path) }}</span>
-        <span v-if="lastExport.kind === 'video'"> + SRT</span>
+        <span v-if="lastExport.kind === 'video' && lastExport.wroteSrt"> + SRT</span>
         <q-btn
           flat
           dense
@@ -205,7 +241,7 @@
                     </q-item-section>
                     <q-item-section>
                       <q-item-label>Export video</q-item-label>
-                      <q-item-label caption>Waveform MP4 + SRT</q-item-label>
+                      <q-item-label caption>MP4 options + SRT</q-item-label>
                     </q-item-section>
                   </q-item>
                 </q-list>
@@ -240,6 +276,21 @@
         thread. Export .tune packs that take’s knobs + audio (dropdown → video).
       </div>
     </div>
+
+    </div>
+
+    <VideoExportDialog
+      v-model="exportDialogOpen"
+      :generation-id="exportDialogGeneration?.id ?? null"
+      :generation-label="exportDialogLabel"
+      :exporting="Boolean(exportingId && exportDialogGeneration && exportingId === exportDialogGeneration.id)"
+      @export="onConfirmExportVideo"
+    />
+    <CoverCropDialog
+      v-model="coverDialogOpen"
+      :saving="coverBusy"
+      @apply="onApplyCover"
+    />
   </div>
 </template>
 
@@ -247,12 +298,15 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useQuasar } from 'quasar';
+import CoverCropDialog from '@/components/CoverCropDialog.vue';
+import VideoExportDialog from '@/components/VideoExportDialog.vue';
 import type { GenerationRecord } from '@/models/generation';
+import type { VideoExportOptions } from '@/models/videoExport';
 import { useLibraryStore } from '@/stores/library';
 
 const $q = useQuasar();
 const library = useLibraryStore();
-const { songGenerations, currentGeneration, recallWarning } = storeToRefs(library);
+const { songGenerations, currentGeneration, recallWarning, activeSong } = storeToRefs(library);
 const recallingId = ref<string | null>(null);
 const forkingId = ref<string | null>(null);
 const exportingId = ref<string | null>(null);
@@ -261,14 +315,69 @@ const lastExport = ref<{
   generationId: string;
   kind: 'tune' | 'video';
   path: string;
+  wroteSrt?: boolean;
 } | null>(null);
 const savingNotesId = ref<string | null>(null);
 const expandedId = ref<string | null>(null);
 const draftNotes = reactive<Record<string, string>>({});
+const exportDialogOpen = ref(false);
+const exportDialogGeneration = ref<GenerationRecord | null>(null);
+const coverDialogOpen = ref(false);
+const coverBusy = ref(false);
+/** Cache-bust so replaced covers refresh in the panel. */
+const coverCacheKey = ref(0);
+
+const exportDialogLabel = computed(() => {
+  const g = exportDialogGeneration.value;
+  if (!g) return '';
+  return `${g.patternName} · ${g.mode} · ${formatTime(g.createdAt)}`;
+});
+
+const coverUrl = computed(() => {
+  const base = activeSong.value?.coverFileUrl;
+  if (!base) return '';
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}v=${coverCacheKey.value}`;
+});
 
 const audioSrc = computed(
   () => currentGeneration.value?.audioFileUrl || currentGeneration.value?.audioPath || '',
 );
+
+async function onApplyCover(jpegDataUrl: string): Promise<void> {
+  if (coverBusy.value) return;
+  coverBusy.value = true;
+  try {
+    await library.setSongCover(jpegDataUrl);
+    coverCacheKey.value += 1;
+    coverDialogOpen.value = false;
+    $q.notify({ type: 'positive', message: 'Cover saved', timeout: 1600 });
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: e instanceof Error ? e.message : String(e),
+    });
+  } finally {
+    coverBusy.value = false;
+  }
+}
+
+async function onClearCover(): Promise<void> {
+  if (coverBusy.value) return;
+  coverBusy.value = true;
+  try {
+    await library.clearSongCover();
+    coverCacheKey.value += 1;
+    $q.notify({ type: 'positive', message: 'Cover cleared', timeout: 1400 });
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: e instanceof Error ? e.message : String(e),
+    });
+  } finally {
+    coverBusy.value = false;
+  }
+}
 
 let unsubExportProgress: (() => void) | null = null;
 
@@ -433,19 +542,32 @@ async function onExportTune(g: GenerationRecord): Promise<void> {
   }
 }
 
-async function onExportVideo(g: GenerationRecord): Promise<void> {
-  if (exportingId.value || !window.mytunes) return;
+function onExportVideo(g: GenerationRecord): void {
+  if (exportingId.value) return;
+  exportDialogGeneration.value = g;
+  exportDialogOpen.value = true;
+}
+
+async function onConfirmExportVideo(options: VideoExportOptions): Promise<void> {
+  const g = exportDialogGeneration.value;
+  if (!g || exportingId.value || !window.mytunes) return;
   exportingId.value = g.id;
   exportStatus.value = 'Preparing video…';
   try {
-    const result = await window.mytunes.exportVideo(g.id);
+    const result = await window.mytunes.exportVideo(g.id, options);
     lastExport.value = {
       generationId: g.id,
       kind: 'video',
       path: result.mp4Path,
+      wroteSrt: options.writeSrt && Boolean(result.srtPath),
     };
+    exportDialogOpen.value = false;
     const cuesNote =
-      result.cueCount > 0 ? ` · ${result.cueCount} captions` : ' · no captions';
+      result.cueCount > 0
+        ? ` · ${result.cueCount} captions`
+        : options.writeSrt
+          ? ' · no captions'
+          : '';
     $q.notify({
       type: 'positive',
       message: `Exported waveform video${cuesNote}`,

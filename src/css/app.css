@@ -180,6 +180,43 @@ body,
   overflow: hidden;
 }
 
+.audio-player {
+  position: relative;
+}
+
+.audio-player__cover {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  filter: saturate(1.05);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.audio-player__scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(18, 14, 10, 0.72) 0%,
+    rgba(18, 14, 10, 0.82) 45%,
+    rgba(18, 14, 10, 0.9) 100%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.audio-player__content {
+  position: relative;
+  z-index: 2;
+}
+
+.audio-player--has-cover {
+  background: transparent;
+}
+
 .mt-label {
   color: var(--mt-muted);
   font-size: 0.75rem;

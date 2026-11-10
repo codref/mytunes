@@ -85,10 +85,23 @@ demo.tune
 
 `index.json` lists take metadata (mode, model, compiled prompt snapshot, optional returned lyrics). Audio filenames match generation ids.
 
+## With cover artwork
+
+```text
+demo.tune
+├── manifest.json          # includes "cover": "cover.jpg"
+├── song.json
+├── cover.jpg              # square JPEG (1:1 recommended)
+├── prompt/compiled.txt
+└── legal/license-primary.txt
+```
+
+Cover is song-level (not per take). Players MAY show it as album art or a panel background.
+
 ## myTunes round-trip
 
-1. Author knobs + lyrics + Rights tab.
-2. **Export .tune…** → native save dialog → folder revealed.
-3. On another machine: **Open → Load .tune…** → new library song + remapped takes.
+1. Author knobs + lyrics + Rights tab; optionally **Set cover** on the player panel (1:1 crop).
+2. **Export .tune…** → native save dialog → folder revealed (includes `cover.jpg` when set).
+3. On another machine: **Open → Load .tune…** → new library song + remapped takes + cover.
 
 Implementation: [`tuneArchive.ts`](../../src-electron/services/tuneArchive.ts).

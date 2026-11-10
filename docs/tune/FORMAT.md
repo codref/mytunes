@@ -15,6 +15,7 @@ Writers MUST set `tuneFormatVersion` to an integer they support. Readers MUST re
 archive.tune/                    (ZIP root)
   manifest.json                  REQUIRED
   song.json                      REQUIRED
+  cover.jpg                      OPTIONAL (square song artwork, JPEG recommended)
   prompt/
     compiled.txt                 REQUIRED (may be empty if instrumental / incomplete)
   legal/
@@ -39,7 +40,8 @@ Minimal interchange header so tools need not parse the full song to show title a
   "songId": "uuid-of-exported-song",
   "title": "Song title",
   "licensePrimary": "CC-BY-SA-4.0",
-  "licenseSecondary": ""
+  "licenseSecondary": "",
+  "cover": "cover.jpg"
 }
 ```
 
@@ -52,6 +54,7 @@ Minimal interchange header so tools need not parse the full song to show title a
 | `title` | yes | Display title |
 | `licensePrimary` | yes | SPDX id or custom token |
 | `licenseSecondary` | yes | Empty string if not dual-licensed |
+| `cover` | no | Relative path to artwork in the archive when present (canonical: `cover.jpg`) |
 
 ## `song.json`
 
@@ -64,8 +67,22 @@ Full song project document. In the myTunes reference model this is a `Song`:
   updatedAt: string;           // ISO-8601
   pattern: Pattern;            // creative source
   activeGenerationId?: string; // optional pointer into generations/
+  // coverFileUrl is runtime-only in myTunes — not written to song.json
 }
 ```
+
+## `cover.jpg` (optional)
+
+Song-level artwork for players and library UIs.
+
+| Rule | Detail |
+|------|--------|
+| Path | Prefer root `cover.jpg`. Readers MAY also accept `cover.jpeg` / `cover.png` / `cover.webp`, or the path in `manifest.cover`. |
+| Aspect | **1:1 (square) recommended.** Writers SHOULD crop/letterbox to square before packing. |
+| Format | JPEG is the interchange default; other still formats MAY be accepted on import and normalized. |
+| Scope | One cover per song / archive — not per take. |
+
+Host apps SHOULD store covers outside absolute paths in `song.json` (e.g. by song id on disk) and reattach a display URL at load time.
 
 ### `Pattern` (creative source)
 

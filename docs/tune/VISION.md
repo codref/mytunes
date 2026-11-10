@@ -18,6 +18,7 @@ A `.tune` file is the **source code of a song**:
 2. **Compiled prompt** — a frozen natural-language rendering of that intent for a generator.
 3. **Rights** — who wrote it, under which SPDX license(s), human/AI disclosure.
 4. **Optional takes** — example renders so a package remains playable offline.
+5. **Optional cover** — square artwork so players and libraries can present the song visually.
 
 Audio is a *build artifact*. The pattern is the program.
 

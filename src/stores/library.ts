@@ -131,6 +131,7 @@ export const useLibraryStore = defineStore('library', () => {
   async function saveSongAs(name: string): Promise<Song> {
     if (!window.mytunes) throw new Error('Electron bridge unavailable');
     const patternStore = usePatternStore();
+    const previousId = activeSong.value?.id ?? null;
     const pattern = structuredClone(toIpcPayload(patternStore.pattern));
     pattern.id = crypto.randomUUID();
     pattern.name = name.trim() || 'Untitled Song';
@@ -140,12 +141,37 @@ export const useLibraryStore = defineStore('library', () => {
       id: pattern.id,
       name: pattern.name,
     });
-    const saved = await window.mytunes.saveSong(toIpcPayload(song));
+    let saved = await window.mytunes.saveSong(toIpcPayload(song));
+    if (previousId) {
+      const withCover = await window.mytunes.copySongCover(previousId, saved.id);
+      if (withCover) saved = withCover;
+    }
     activeSong.value = saved;
     currentGeneration.value = null;
     markClean(saved.pattern);
     await refresh();
     return saved;
+  }
+
+  async function setSongCover(jpegBase64: string): Promise<Song> {
+    if (!window.mytunes) throw new Error('Electron bridge unavailable');
+    let songId = activeSong.value?.id;
+    if (!songId) {
+      const saved = await saveSong();
+      songId = saved.id;
+    }
+    const updated = await window.mytunes.setSongCover(songId, jpegBase64);
+    activeSong.value = updated;
+    await refreshSongs();
+    return updated;
+  }
+
+  async function clearSongCover(): Promise<Song | null> {
+    if (!window.mytunes || !activeSong.value) return null;
+    const updated = await window.mytunes.clearSongCover(activeSong.value.id);
+    activeSong.value = updated;
+    await refreshSongs();
+    return updated;
   }
 
   async function newSong(): Promise<void> {
@@ -319,6 +345,8 @@ export const useLibraryStore = defineStore('library', () => {
     openSong,
     saveSong,
     saveSongAs,
+    setSongCover,
+    clearSongCover,
     newSong,
     deleteActiveSong,
     recallGeneration,

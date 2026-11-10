@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   BrowserWindow,
   dialog,
@@ -47,6 +49,7 @@ import {
   splitLyriaTranscriptWithFlash,
 } from './geminiClient';
 import { listChatModels, listLyriaModels } from './modelCatalog';
+import type { VideoExportOptions } from '../../src/models/videoExport';
 import { exportGenerationVideo } from './videoExport';
 import { scoreLyricOverlap } from '../../src/models/compilePrompt';
 import {
@@ -68,6 +71,12 @@ import {
   savePreset,
 } from './presetStore';
 import {
+  attachCoverUrl,
+  copyCover,
+  deleteCover,
+  writeCoverJpeg,
+} from './coverStore';
+import {
   deleteSong,
   ensureSongForPattern,
   getSession,
@@ -86,6 +95,13 @@ import {
 
 function ipcSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** Safe coerce for IPC args (avoids Object stringification lint). */
+function asIpcString(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return fallback;
 }
 
 function errMessage(error: unknown): string {
@@ -124,11 +140,15 @@ const channels = [
   'mytunes:generations:fork',
   'mytunes:generations:exportVideo',
   'mytunes:generations:exportTune',
+  'mytunes:pickImageFile',
   'mytunes:revealInFolder',
   'mytunes:songs:list',
   'mytunes:songs:save',
   'mytunes:songs:load',
   'mytunes:songs:delete',
+  'mytunes:songs:setCover',
+  'mytunes:songs:clearCover',
+  'mytunes:songs:copyCover',
   'mytunes:songs:exportTune',
   'mytunes:songs:importTune',
   'mytunes:presets:list',
@@ -515,13 +535,17 @@ export function registerIpcHandlers(): void {
     return patchGeneration(String(id), patch);
   });
   handle('mytunes:generations:fork', (_e, generationId, name) => {
-    const result = cloneGenerationToSong(String(generationId), String(name ?? ''));
+    const result = cloneGenerationToSong(asIpcString(generationId), asIpcString(name));
     setSession({ lastSongId: result.song.id });
     return result;
   });
-  handle('mytunes:generations:exportVideo', async (event, generationId) => {
-    const id = String(generationId ?? '');
-    return exportGenerationVideo(id, (percent, message) => {
+  handle('mytunes:generations:exportVideo', async (event, generationId, optionsRaw) => {
+    const id = asIpcString(generationId);
+    const options =
+      optionsRaw && typeof optionsRaw === 'object'
+        ? (optionsRaw as Partial<VideoExportOptions>)
+        : undefined;
+    return exportGenerationVideo(id, options, (percent, message) => {
       event.sender.send('mytunes:exportVideo:progress', {
         generationId: id,
         percent,
@@ -529,8 +553,41 @@ export function registerIpcHandlers(): void {
       });
     });
   });
+
+  handle('mytunes:pickImageFile', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const openOpts = {
+      title: 'Choose background image',
+      properties: ['openFile' as const],
+      filters: [
+        {
+          name: 'Images',
+          extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+        },
+      ],
+    };
+    const result = win
+      ? await dialog.showOpenDialog(win, openOpts)
+      : await dialog.showOpenDialog(openOpts);
+    if (result.canceled || !result.filePaths[0]) {
+      return { canceled: true as const };
+    }
+    const imagePath = result.filePaths[0];
+    const buf = fs.readFileSync(imagePath);
+    const ext = path.extname(imagePath).toLowerCase().replace('.', '');
+    const mime =
+      ext === 'png'
+        ? 'image/png'
+        : ext === 'webp'
+          ? 'image/webp'
+          : ext === 'gif'
+            ? 'image/gif'
+            : 'image/jpeg';
+    const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+    return { canceled: false as const, path: imagePath, dataUrl };
+  });
   handle('mytunes:generations:exportTune', async (event, generationIdRaw) => {
-    const generationId = String(generationIdRaw ?? '');
+    const generationId = asIpcString(generationIdRaw);
     if (!generationId) throw new Error('Generation id required');
     const win = BrowserWindow.fromWebContents(event.sender);
     const saveOpts = {
@@ -552,7 +609,7 @@ export function registerIpcHandlers(): void {
     return { canceled: false as const, ...exported };
   });
   handle('mytunes:revealInFolder', (_e, filePath) => {
-    const p = String(filePath ?? '');
+    const p = asIpcString(filePath);
     if (!p) throw new Error('No path to reveal');
     shell.showItemInFolder(p);
     return { ok: true as const };
@@ -571,8 +628,36 @@ export function registerIpcHandlers(): void {
   });
   handle('mytunes:songs:delete', (_e, id) => deleteSong(String(id)));
 
+  handle('mytunes:songs:setCover', (_e, songIdRaw, jpegBase64) => {
+    const songId = asIpcString(songIdRaw);
+    const song = loadSong(songId);
+    if (!song) throw new Error('Song not found — save the song before setting a cover');
+    writeCoverJpeg(songId, asIpcString(jpegBase64));
+    return attachCoverUrl(song);
+  });
+
+  handle('mytunes:songs:clearCover', (_e, songIdRaw) => {
+    const songId = asIpcString(songIdRaw);
+    const song = loadSong(songId);
+    if (!song) throw new Error('Song not found');
+    deleteCover(songId);
+    delete song.coverFileUrl;
+    return song;
+  });
+
+  handle('mytunes:songs:copyCover', (_e, fromRaw, toRaw) => {
+    const fromId = asIpcString(fromRaw);
+    const toId = asIpcString(toRaw);
+    if (!copyCover(fromId, toId)) {
+      const song = loadSong(toId);
+      return song;
+    }
+    const song = loadSong(toId);
+    return song ? attachCoverUrl(song) : null;
+  });
+
   handle('mytunes:songs:exportTune', async (event, songIdRaw) => {
-    const songId = String(songIdRaw ?? '');
+    const songId = asIpcString(songIdRaw);
     const song = loadSong(songId);
     if (!song) throw new Error('Song not found — save the song before exporting');
     const win = BrowserWindow.fromWebContents(event.sender);

@@ -2,7 +2,7 @@
 
 **Status:** Draft · **Version:** 1 · **Extension:** `.tune`
 
-`.tune` is an open, ZIP-based container for the **source of a song** — structured creative intent, lyrics, arrangement knobs, rights, and optional rendered takes — so tools and players can **reproduce, share, and adapt** music without treating a single MP3 as the only artifact.
+`.tune` is an open, ZIP-based container for the **source of a song** — structured creative intent, lyrics, arrangement knobs, rights, optional cover artwork, and optional rendered takes — so tools and players can **reproduce, share, and adapt** music without treating a single MP3 as the only artifact.
 
 Music is becoming generative and personal. Fixed recordings still matter; they are no longer the whole story. A format that carries *how a song is specified* lets a player, studio, or agent regenerate or reshape the piece for different tastes, contexts, or models — while keeping authorship and license first-class.
 

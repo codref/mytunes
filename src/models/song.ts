@@ -6,6 +6,11 @@ export interface Song {
   updatedAt: string;
   pattern: Pattern;
   activeGenerationId?: string;
+  /**
+   * Runtime-only URL for the song cover (`mytunes://cover/{id}`).
+   * Not persisted in song.json — presence is inferred from the covers/ file.
+   */
+  coverFileUrl?: string;
 }
 
 export interface AppSession {

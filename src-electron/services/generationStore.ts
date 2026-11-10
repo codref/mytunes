@@ -10,6 +10,7 @@ import {
   type Pattern,
 } from '../../src/models/pattern';
 import { createSong, type Song } from '../../src/models/song';
+import { attachCoverUrl, copyCover, getCoverPath } from './coverStore';
 import { saveSong } from './songStore';
 
 const SCHEMA = 'mytunes';
@@ -215,12 +216,15 @@ export function cloneGenerationToSong(
     activeGenerationId: generation.id,
   });
   const savedSong = saveSong(song);
+  if (source.songId) {
+    copyCover(source.songId, savedSong.id);
+  }
 
   const list = loadGenerations();
   list.unshift(generation);
   saveIndex(list.slice(0, 200));
 
-  return { song: savedSong, generation: normalizeGeneration(generation) };
+  return { song: attachCoverUrl(savedSong), generation: normalizeGeneration(generation) };
 }
 
 export function registerAudioProtocol(): void {
@@ -229,7 +233,15 @@ export function registerAudioProtocol(): void {
     try {
       const url = new URL(request.url);
       const id = url.pathname.replace(/^\//, '');
-      const filePath = getGenerationAudioPath(id);
+      const kind = (url.hostname || '').toLowerCase();
+      let filePath: string | null = null;
+      if (kind === 'cover') {
+        const cover = getCoverPath(id);
+        filePath = fs.existsSync(cover) ? cover : null;
+      } else {
+        // generation (default) — pathname is the generation id
+        filePath = getGenerationAudioPath(id);
+      }
       if (!filePath) {
         callback({ error: -6 });
         return;

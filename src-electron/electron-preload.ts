@@ -6,6 +6,7 @@ import type { Pattern } from '../src/models/pattern';
 import type { StudioPreset } from '../src/models/presets';
 import type { AppSettingsUpdate } from '../src/models/settings';
 import type { AppSession, Song } from '../src/models/song';
+import type { VideoExportOptions } from '../src/models/videoExport';
 
 /** Strip Vue reactive proxies so Electron structured clone succeeds. */
 function cloneForIpc<T>(value: T): T {
@@ -38,8 +39,13 @@ const mytunes: MytunesApi = {
     ipcRenderer.invoke('mytunes:generations:patch', id, cloneForIpc(patch)),
   forkGeneration: (generationId, name) =>
     ipcRenderer.invoke('mytunes:generations:fork', generationId, name),
-  exportVideo: (generationId) =>
-    ipcRenderer.invoke('mytunes:generations:exportVideo', generationId),
+  exportVideo: (generationId, options?: Partial<VideoExportOptions>) =>
+    ipcRenderer.invoke(
+      'mytunes:generations:exportVideo',
+      generationId,
+      options ? cloneForIpc(options) : undefined,
+    ),
+  pickImageFile: () => ipcRenderer.invoke('mytunes:pickImageFile'),
   exportTuneGeneration: (generationId) =>
     ipcRenderer.invoke('mytunes:generations:exportTune', generationId),
   onExportVideoProgress: (handler) => {
@@ -59,6 +65,11 @@ const mytunes: MytunesApi = {
   saveSong: (song: Song) => ipcRenderer.invoke('mytunes:songs:save', cloneForIpc(song)),
   loadSong: (id) => ipcRenderer.invoke('mytunes:songs:load', id),
   deleteSong: (id) => ipcRenderer.invoke('mytunes:songs:delete', id),
+  setSongCover: (songId, jpegBase64) =>
+    ipcRenderer.invoke('mytunes:songs:setCover', songId, jpegBase64),
+  clearSongCover: (songId) => ipcRenderer.invoke('mytunes:songs:clearCover', songId),
+  copySongCover: (fromSongId, toSongId) =>
+    ipcRenderer.invoke('mytunes:songs:copyCover', fromSongId, toSongId),
   exportTune: (songId) => ipcRenderer.invoke('mytunes:songs:exportTune', songId),
   importTune: () => ipcRenderer.invoke('mytunes:songs:importTune'),
   listPresets: () => ipcRenderer.invoke('mytunes:presets:list'),

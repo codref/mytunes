@@ -5,6 +5,11 @@ import type { GenerationRecord } from '../../src/models/generation';
 import { normalizePattern, type Pattern } from '../../src/models/pattern';
 import { createSong, type Song } from '../../src/models/song';
 import {
+  attachCoverUrl,
+  readCoverBytes,
+  writeCoverJpeg,
+} from './coverStore';
+import {
   findGenerationById,
   generationsDir,
   getGenerationAudioPath,
@@ -23,6 +28,8 @@ export interface TuneManifest {
   title: string;
   licensePrimary: string;
   licenseSecondary: string;
+  /** Relative path inside the archive when a cover is included (usually `cover.jpg`). */
+  cover?: string;
 }
 
 export interface ExportTuneResult {
@@ -75,9 +82,12 @@ async function writeTuneArchive(
   song: Song,
   gens: GenerationRecord[],
   destPath: string,
+  opts?: { coverSongId?: string },
 ): Promise<ExportTuneResult> {
   normalizePattern(song.pattern);
   const { primary, secondary } = rightsFromSong(song);
+  const coverSongId = opts?.coverSongId ?? song.id;
+  const coverBytes = readCoverBytes(coverSongId);
 
   const manifest: TuneManifest = {
     tuneFormatVersion: TUNE_FORMAT_VERSION,
@@ -88,10 +98,15 @@ async function writeTuneArchive(
     licensePrimary: primary,
     licenseSecondary: secondary,
   };
+  if (coverBytes) {
+    manifest.cover = 'cover.jpg';
+  }
 
   const zip = new JSZip();
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
-  zip.file('song.json', JSON.stringify(song, null, 2));
+  const songDisk: Song = { ...song };
+  delete songDisk.coverFileUrl;
+  zip.file('song.json', JSON.stringify(songDisk, null, 2));
   zip.file(
     'prompt/compiled.txt',
     (song.pattern.compiledPrompt ?? '').trim() + '\n',
@@ -100,9 +115,17 @@ async function writeTuneArchive(
   if (secondary) {
     zip.file('legal/license-secondary.txt', resolveLicenseText(secondary));
   }
+  if (coverBytes) {
+    zip.file('cover.jpg', coverBytes);
+  }
 
   const portableGens = gens.map((g) => {
-    const { audioPath: _audioPath, audioFileUrl: _url, ...rest } = g;
+    const rest: Omit<GenerationRecord, 'audioPath' | 'audioFileUrl'> & {
+      audioPath?: string;
+      audioFileUrl?: string;
+    } = { ...g };
+    delete rest.audioPath;
+    delete rest.audioFileUrl;
     return rest;
   });
   zip.file('generations/index.json', JSON.stringify(portableGens, null, 2));
@@ -171,7 +194,9 @@ export async function exportTuneGeneration(
     activeGenerationId: gen.id,
   });
 
-  return writeTuneArchive(song, [gen], destPath);
+  // Prefer the parent library song’s cover for single-take exports.
+  const coverSongId = parent?.id ?? gen.songId ?? song.id;
+  return writeTuneArchive(song, [gen], destPath, { coverSongId });
 }
 
 function parseJson<T>(raw: string | undefined, label: string): T {
@@ -242,7 +267,18 @@ export async function importTune(srcPath: string): Promise<ImportTuneResult> {
     name: pattern.name || imported.name || manifest.title || 'Imported Song',
     ...(remappedActive ? { activeGenerationId: remappedActive } : {}),
   });
-  const savedSong = saveSong(song);
+  let savedSong = saveSong(song);
+
+  const coverEntry = findCoverEntry(zip, manifest.cover);
+  if (coverEntry) {
+    try {
+      const bytes = await coverEntry.async('nodebuffer');
+      writeCoverJpeg(newSongId, bytes);
+      savedSong = attachCoverUrl(savedSong);
+    } catch {
+      /* ignore undecodable cover */
+    }
+  }
 
   const dir = generationsDir();
   const existing = loadGenerations();
@@ -306,6 +342,23 @@ export async function importTune(srcPath: string): Promise<ImportTuneResult> {
   }
 
   return { song: savedSong, generationCount: added.length };
+}
+
+function findCoverEntry(zip: JSZip, manifestCover?: string): JSZip.JSZipObject | null {
+  const candidates = [
+    manifestCover,
+    'cover.jpg',
+    'cover.jpeg',
+    'cover.png',
+    'cover.webp',
+  ].filter((p): p is string => Boolean(p?.trim()));
+
+  for (const name of candidates) {
+    const normalized = name.replace(/^\.\//, '').replace(/^\/+/, '');
+    const entry = zip.file(normalized);
+    if (entry && !entry.dir) return entry;
+  }
+  return null;
 }
 
 export function defaultExportFilename(song: Song): string {

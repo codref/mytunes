@@ -10,6 +10,7 @@
 | Prompt snapshot | Frozen `prompt/compiled.txt` at export time |
 | Rights | Composer/lyricist/holder/year, SPDX primary (+ optional secondary), made-by, notice |
 | Takes | Optional generation index + MP3s for that song only |
+| Cover | Optional square song artwork (`cover.jpg`) for players / libraries |
 | Round-trip | Import always mints new ids (no silent overwrite of a library) |
 
 ## Explicitly out of scope (v1)
@@ -38,4 +39,5 @@ A third-party tool can:
 1. Unzip a `.tune` and read title, licenses, and lyrics without myTunes.
 2. Feed `prompt/compiled.txt` (or recompile from `song.json`) into another model.
 3. Optionally play included takes.
-4. Optionally apply a taste profile and produce a derived `.tune` under the stated license.
+4. Optionally display `cover.jpg` as song artwork.
+5. Optionally apply a taste profile and produce a derived `.tune` under the stated license.

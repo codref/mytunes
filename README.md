@@ -33,7 +33,7 @@ Desktop music studio that turns band-style knobs, lyrics, and arrangement into a
 - Version history with recall / fork from prior takes
 - Waveform MP4 + SRT export
 - Per-song Rights tab (composer, copyright, SPDX license; default CC BY-SA 4.0; optional dual license)
-- Portable `.tune` archives (song source + takes) via Export / Load
+- Portable `.tune` archives (song source + optional cover + takes) via Export / Load
 - Chat assistant that proposes soft knobs patches and hard lyrics/structure changes
 
 ### Out of scope
@@ -72,7 +72,7 @@ If the header shows a red banner (“No backend configured”), open **Settings*
 |------|----------------|
 | **Header** | Song title, version count, budget meter, Settings, Assistant |
 | **Left panel** | Band tabs that define the pattern |
-| **Right panel** | Player, version list, video export |
+| **Right panel** | Player (optional cover background), version list, video export |
 | **Toolbar** | New / Save / Save as / Export .tune / Open (incl. Load .tune), Generate Clip or Full |
 
 Songs and MP3s are stored under Electron `userData` (not in the git repo).
@@ -90,8 +90,9 @@ Songs and MP3s are stored under Electron `userData` (not in the git repo).
 7. **Prompt tab** — review the compiled prompt before spending.
 8. **Generate** — prefer **Clip** while iterating (~$0.04); use **Full** when committing (~$0.08).
 9. **Listen & audit** — play the take; check **Coherence** for knob/lyric drift; adopt returned lyrics from the Lyrics tab when useful.
-10. **Versions** — expand a take to recall its pattern, fork into a new song, or **Export video** (waveform MP4 + SRT).
-11. **Share** — **Export .tune…** packs the song + takes into a portable archive; **Open → Load .tune…** imports one (always as a new library entry).
+10. **Cover** — optional square artwork via **Set cover** on the player panel (shown as a dimmed background; packed into `.tune`).
+11. **Versions** — expand a take to recall its pattern, fork into a new song, or **Export video** (waveform MP4 + SRT).
+12. **Share** — **Export .tune…** packs the song + takes (+ cover) into a portable archive; **Open → Load .tune…** imports one (always as a new library entry).
 
 ### Song tab
 
@@ -110,17 +111,18 @@ Authorship and licensing for the *creative work* (separate from the app’s MIT 
 
 ### `.tune` archives
 
-A `.tune` file is a ZIP (`tuneFormatVersion: 1`) containing the **source of a song** (pattern, rights, compiled prompt) plus optional takes — so music can be shared, regenerated, and adapted like source code, not only as a fixed MP3.
+A `.tune` file is a ZIP (`tuneFormatVersion: 1`) containing the **source of a song** (pattern, rights, compiled prompt) plus optional cover artwork and takes — so music can be shared, regenerated, and adapted like source code, not only as a fixed MP3.
 
 | Path | Contents |
 |------|----------|
-| `manifest.json` | Format version, title, song id, license SPDX ids |
+| `manifest.json` | Format version, title, song id, license SPDX ids, optional `cover` path |
 | `song.json` | Full song + pattern (knobs, lyrics, rights) |
+| `cover.jpg` | Optional square song artwork (1:1 JPEG recommended) |
 | `prompt/compiled.txt` | Frozen compiled Lyria prompt at export time |
 | `legal/license-*.txt` | Short license text for primary (and secondary if dual) |
 | `generations/` | That song’s takes (`index.json` + `.mp3` files when present) |
 
-**Export .tune…** (toolbar) saves the current song and packs **all** of its takes. On a version in the player, **Export .tune** packs **that take only** (knobs snapshot + audio); the dropdown also offers waveform video. **Load .tune…** always mints new song/generation ids so the library is never overwritten.
+**Export .tune…** (toolbar) saves the current song and packs **all** of its takes (and cover when set). On a version in the player, **Export .tune** packs **that take only** (knobs snapshot + audio + parent cover); the dropdown also offers waveform video. **Load .tune…** always mints new song/generation ids so the library is never overwritten.
 
 **Open standard docs:** [docs/tune/](docs/tune/README.md) — vision, scope, format internals, rights, adaptation, conformance.
 

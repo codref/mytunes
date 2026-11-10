@@ -8,10 +8,11 @@ import {
   type AppSession,
   type Song,
 } from '../../src/models/song';
+import { attachCoverUrl, deleteCover, stripCoverUrlForPersist } from './coverStore';
 
 function normalizeSong(song: Song): Song {
   if (song.pattern) normalizePattern(song.pattern);
-  return song;
+  return attachCoverUrl(song);
 }
 
 function songsDir(): string {
@@ -97,14 +98,16 @@ export function saveSong(song: Song): Song {
     updatedAt: new Date().toISOString(),
     pattern: structuredClone(song.pattern),
   };
-  fs.writeFileSync(songFile(next.id), JSON.stringify(next, null, 2), 'utf8');
-  return next;
+  const toDisk = stripCoverUrlForPersist(next);
+  fs.writeFileSync(songFile(next.id), JSON.stringify(toDisk, null, 2), 'utf8');
+  return attachCoverUrl(next);
 }
 
 export function deleteSong(id: string): { ok: boolean } {
   const file = songFile(id);
   if (!fs.existsSync(file)) return { ok: false };
   fs.unlinkSync(file);
+  deleteCover(id);
   return { ok: true };
 }
 
