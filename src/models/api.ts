@@ -97,6 +97,13 @@ export interface MytunesApi {
     durationSec: number;
     cueCount: number;
   }>;
+  /** Native save dialog → pack one history take as a .tune ZIP. */
+  exportTuneGeneration: (
+    generationId: string,
+  ) => Promise<
+    | { canceled: true }
+    | { canceled: false; path: string; generationCount: number }
+  >;
   onExportVideoProgress: (
     handler: (event: {
       generationId: string;
@@ -109,6 +116,18 @@ export interface MytunesApi {
   saveSong: (song: Song) => Promise<Song>;
   loadSong: (id: string) => Promise<Song | null>;
   deleteSong: (id: string) => Promise<{ ok: boolean }>;
+  /** Native save dialog → pack song + all takes into a .tune ZIP. */
+  exportTune: (
+    songId: string,
+  ) => Promise<
+    | { canceled: true }
+    | { canceled: false; path: string; generationCount: number }
+  >;
+  /** Native open dialog → unpack .tune into library (new ids). */
+  importTune: () => Promise<
+    | { canceled: true }
+    | { canceled: false; song: Song; generationCount: number }
+  >;
   listPresets: () => Promise<StudioPreset[]>;
   savePreset: (preset: StudioPreset) => Promise<StudioPreset>;
   deletePreset: (id: string) => Promise<{ ok: boolean }>;

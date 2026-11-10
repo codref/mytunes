@@ -12,6 +12,7 @@
       mobile-arrows
     >
       <q-tab name="song" label="Song" />
+      <q-tab name="rights" label="Rights" />
       <q-tab name="lyrics" label="Lyrics" />
       <q-tab name="coherence" label="Coherence" />
       <q-tab
@@ -153,6 +154,102 @@
         </div>
       </q-tab-panel>
 
+      <q-tab-panel name="rights" class="q-pa-none">
+        <div class="mt-knob-row">
+          <q-input
+            v-model="rights.composers"
+            filled
+            dark
+            dense
+            label="Composer(s)"
+            hint="e.g. A. Name; B. Name"
+          />
+          <q-input
+            v-model="rights.lyricists"
+            filled
+            dark
+            dense
+            label="Lyricist(s)"
+            hint="Leave blank if same as composer"
+          />
+          <div class="band-meter-row">
+            <q-input
+              v-model="rights.copyrightHolder"
+              filled
+              dark
+              dense
+              label="Copyright holder"
+            />
+            <q-input
+              v-model="rights.copyrightYear"
+              filled
+              dark
+              dense
+              label="Copyright year"
+              mask="####"
+            />
+          </div>
+          <q-select
+            v-model="primaryLicenseSelect"
+            :options="licenseSelectOptions"
+            filled
+            dark
+            dense
+            label="Primary license"
+            hint="Default CC BY-SA 4.0 — applies to this creative work"
+          />
+          <q-input
+            v-if="primaryIsCustom"
+            v-model="rights.licensePrimary"
+            filled
+            dark
+            dense
+            label="Custom primary SPDX / license id"
+          />
+          <q-toggle v-model="dualLicense" color="primary" label="Dual license" />
+          <div class="mt-label text-grey-5">{{ dualLicenseHint }}</div>
+          <q-select
+            v-if="dualLicense"
+            v-model="secondaryLicenseSelect"
+            :options="licenseSelectOptions"
+            filled
+            dark
+            dense
+            label="Secondary license"
+            hint="Downstream may comply with either primary or secondary"
+          />
+          <q-input
+            v-if="dualLicense && secondaryIsCustom"
+            v-model="rights.licenseSecondary"
+            filled
+            dark
+            dense
+            label="Custom secondary SPDX / license id"
+          />
+          <q-btn-toggle
+            v-model="rights.madeBy"
+            spread
+            no-caps
+            dense
+            toggle-color="primary"
+            color="grey-9"
+            text-color="grey-4"
+            :options="madeByOptions"
+            class="composition-toggle"
+          />
+          <q-input
+            v-model="rights.notice"
+            filled
+            dark
+            dense
+            type="textarea"
+            autogrow
+            label="Notice / credit (optional)"
+            hint="Extra attribution, URL, or rights notes"
+          />
+        </div>
+      </q-tab-panel>
+
       <q-tab-panel name="lyrics" class="q-pa-none">
         <LyricsEditor />
       </q-tab-panel>
@@ -180,6 +277,11 @@
 import { computed, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import {
+  CUSTOM_LICENSE_OPTION,
+  isKnownSpdxLicense,
+  LICENSE_SELECT_OPTIONS,
+} from '@/models/licenses';
+import {
   BAND_SLOT_IDS,
   deriveTimelineFromStructure,
   getCompositionMode,
@@ -187,6 +289,7 @@ import {
   MUSIC_KEYS,
   TIME_SIGNATURES,
   type CompositionMode,
+  type SongMadeBy,
 } from '@/models/pattern';
 import { defaultTimelineDuration, structureFromTimeline } from '@/models/timeline';
 import { usePatternStore } from '@/stores/pattern';
@@ -202,6 +305,70 @@ const patternStore = usePatternStore();
 const { pattern } = storeToRefs(patternStore);
 
 const languages = [...LYRIA_LANGUAGES];
+const licenseSelectOptions = [...LICENSE_SELECT_OPTIONS];
+const dualLicenseHint =
+  'When on, the work is dual-licensed — downstream may use either license.';
+const madeByOptions: { label: string; value: SongMadeBy }[] = [
+  { label: 'Human', value: 'human' },
+  { label: 'AI', value: 'ai' },
+  { label: 'Both', value: 'both' },
+];
+
+// Ensured by createDefaultPattern / normalizePatternSong (stable object ref).
+const rights = computed(() => pattern.value.song.rights!);
+
+const dualLicense = computed({
+  get: () => !!rights.value.licenseSecondary.trim(),
+  set: (on: boolean) => {
+    if (on) {
+      if (!rights.value.licenseSecondary.trim()) {
+        rights.value.licenseSecondary = 'MIT';
+      }
+    } else {
+      rights.value.licenseSecondary = '';
+    }
+  },
+});
+
+function licenseSelectValue(current: string): string {
+  const trimmed = current.trim();
+  if (!trimmed) return LICENSE_SELECT_OPTIONS[0]!;
+  if (isKnownSpdxLicense(trimmed)) return trimmed;
+  return CUSTOM_LICENSE_OPTION;
+}
+
+const primaryLicenseSelect = computed({
+  get: () => licenseSelectValue(rights.value.licensePrimary),
+  set: (v: string) => {
+    if (v === CUSTOM_LICENSE_OPTION) {
+      if (isKnownSpdxLicense(rights.value.licensePrimary)) {
+        rights.value.licensePrimary = '';
+      }
+      return;
+    }
+    rights.value.licensePrimary = v;
+  },
+});
+
+const secondaryLicenseSelect = computed({
+  get: () => licenseSelectValue(rights.value.licenseSecondary || 'MIT'),
+  set: (v: string) => {
+    if (v === CUSTOM_LICENSE_OPTION) {
+      if (isKnownSpdxLicense(rights.value.licenseSecondary)) {
+        rights.value.licenseSecondary = '';
+      }
+      return;
+    }
+    rights.value.licenseSecondary = v;
+  },
+});
+
+const primaryIsCustom = computed(
+  () => primaryLicenseSelect.value === CUSTOM_LICENSE_OPTION,
+);
+const secondaryIsCustom = computed(
+  () => secondaryLicenseSelect.value === CUSTOM_LICENSE_OPTION,
+);
 
 const compositionOptions = [
   { label: 'Sections', value: 'sections' },

@@ -1,3 +1,5 @@
+import { DEFAULT_LICENSE_PRIMARY } from './licenses';
+
 export type LyriaMode = 'clip' | 'full';
 export type CompositionMode = 'sections' | 'timeline';
 export type BandSlotId = 'vocals' | 'drums' | 'bass' | 'guitars' | 'keys' | 'other';
@@ -81,6 +83,22 @@ export interface TimelineSegment {
   intensity: number;
 }
 
+export type SongMadeBy = 'human' | 'ai' | 'both';
+
+/** Authorship and licensing for the creative work (not the app). */
+export interface SongRights {
+  composers: string;
+  lyricists: string;
+  copyrightHolder: string;
+  copyrightYear: string;
+  /** SPDX id, default CC-BY-SA-4.0. */
+  licensePrimary: string;
+  /** Optional second SPDX id — dual license (downstream may use either). */
+  licenseSecondary: string;
+  notice: string;
+  madeBy: SongMadeBy;
+}
+
 export interface PatternSong {
   genre: string;
   mood: string;
@@ -100,6 +118,8 @@ export interface PatternSong {
   productionQuality?: string;
   /** Timed arrangement segments (used when compositionMode is timeline). */
   timeline?: TimelineSegment[];
+  /** Composer / copyright / license (excluded from Lyria prompts). */
+  rights?: SongRights;
 }
 
 export interface Pattern {
@@ -152,6 +172,41 @@ export const TIME_SIGNATURES = ['4/4', '3/4', '2/4', '6/8', '12/8', '5/4', '7/8'
 
 export const DEFAULT_TIME_SIGNATURE = '4/4';
 export const DEFAULT_COMPOSITION_MODE: CompositionMode = 'sections';
+
+export function createDefaultSongRights(partial?: Partial<SongRights>): SongRights {
+  return {
+    composers: partial?.composers ?? '',
+    lyricists: partial?.lyricists ?? '',
+    copyrightHolder: partial?.copyrightHolder ?? '',
+    copyrightYear: partial?.copyrightYear ?? String(new Date().getFullYear()),
+    licensePrimary: partial?.licensePrimary ?? DEFAULT_LICENSE_PRIMARY,
+    licenseSecondary: partial?.licenseSecondary ?? '',
+    notice: partial?.notice ?? '',
+    madeBy: partial?.madeBy ?? 'both',
+  };
+}
+
+/** Fill missing rights fields. Mutates in place when `raw` is already an object. */
+export function normalizeSongRights(raw: Partial<SongRights> | undefined): SongRights {
+  if (!raw || typeof raw !== 'object') {
+    return createDefaultSongRights();
+  }
+  if (typeof raw.composers !== 'string') raw.composers = '';
+  if (typeof raw.lyricists !== 'string') raw.lyricists = '';
+  if (typeof raw.copyrightHolder !== 'string') raw.copyrightHolder = '';
+  if (typeof raw.copyrightYear !== 'string') {
+    raw.copyrightYear = String(new Date().getFullYear());
+  }
+  if (typeof raw.licensePrimary !== 'string' || !raw.licensePrimary.trim()) {
+    raw.licensePrimary = DEFAULT_LICENSE_PRIMARY;
+  }
+  if (typeof raw.licenseSecondary !== 'string') raw.licenseSecondary = '';
+  if (typeof raw.notice !== 'string') raw.notice = '';
+  if (raw.madeBy !== 'human' && raw.madeBy !== 'ai' && raw.madeBy !== 'both') {
+    raw.madeBy = 'both';
+  }
+  return raw as SongRights;
+}
 
 export function createVocalVoice(partial?: Partial<VocalVoice>): VocalVoice {
   return {
@@ -333,6 +388,7 @@ export function createDefaultPattern(
     soundscape: '',
     productionQuality: '',
     timeline: [],
+    rights: createDefaultSongRights(),
   };
 
   const pattern: Pattern = {
@@ -418,6 +474,13 @@ export function normalizePatternSong(song: PatternSong): PatternSong {
   if (song.language !== nextLang) song.language = nextLang;
   if (song.soundscape === undefined) song.soundscape = '';
   if (song.productionQuality === undefined) song.productionQuality = '';
+  // Keep a stable rights object ref — replacing it every compile retriggers the
+  // deep pattern watcher (same footgun as timeline segment arrays).
+  if (!song.rights || typeof song.rights !== 'object') {
+    song.rights = createDefaultSongRights();
+  } else {
+    normalizeSongRights(song.rights);
+  }
   if (!Array.isArray(song.timeline)) {
     song.timeline = [];
   } else {

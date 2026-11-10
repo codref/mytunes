@@ -40,6 +40,8 @@ const mytunes: MytunesApi = {
     ipcRenderer.invoke('mytunes:generations:fork', generationId, name),
   exportVideo: (generationId) =>
     ipcRenderer.invoke('mytunes:generations:exportVideo', generationId),
+  exportTuneGeneration: (generationId) =>
+    ipcRenderer.invoke('mytunes:generations:exportTune', generationId),
   onExportVideoProgress: (handler) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
@@ -57,6 +59,8 @@ const mytunes: MytunesApi = {
   saveSong: (song: Song) => ipcRenderer.invoke('mytunes:songs:save', cloneForIpc(song)),
   loadSong: (id) => ipcRenderer.invoke('mytunes:songs:load', id),
   deleteSong: (id) => ipcRenderer.invoke('mytunes:songs:delete', id),
+  exportTune: (songId) => ipcRenderer.invoke('mytunes:songs:exportTune', songId),
+  importTune: () => ipcRenderer.invoke('mytunes:songs:importTune'),
   listPresets: () => ipcRenderer.invoke('mytunes:presets:list'),
   savePreset: (preset: StudioPreset) =>
     ipcRenderer.invoke('mytunes:presets:save', cloneForIpc(preset)),

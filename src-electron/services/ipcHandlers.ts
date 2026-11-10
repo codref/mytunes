@@ -1,4 +1,10 @@
-import { ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
+import {
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  shell,
+  type IpcMainInvokeEvent,
+} from 'electron';
 import type { AssistantChatRequest, AssistantConversation, AssistantEvent } from '../../src/models/assistant';
 import { estimateMusicCost } from '../../src/models/budget';
 import type { Pattern } from '../../src/models/pattern';
@@ -70,6 +76,13 @@ import {
   saveSong,
   setSession,
 } from './songStore';
+import {
+  defaultExportFilename,
+  defaultGenerationExportFilename,
+  exportTune,
+  exportTuneGeneration,
+  importTune,
+} from './tuneArchive';
 
 function ipcSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -110,11 +123,14 @@ const channels = [
   'mytunes:generations:patch',
   'mytunes:generations:fork',
   'mytunes:generations:exportVideo',
+  'mytunes:generations:exportTune',
   'mytunes:revealInFolder',
   'mytunes:songs:list',
   'mytunes:songs:save',
   'mytunes:songs:load',
   'mytunes:songs:delete',
+  'mytunes:songs:exportTune',
+  'mytunes:songs:importTune',
   'mytunes:presets:list',
   'mytunes:presets:save',
   'mytunes:presets:delete',
@@ -513,6 +529,28 @@ export function registerIpcHandlers(): void {
       });
     });
   });
+  handle('mytunes:generations:exportTune', async (event, generationIdRaw) => {
+    const generationId = String(generationIdRaw ?? '');
+    if (!generationId) throw new Error('Generation id required');
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const saveOpts = {
+      title: 'Export take as .tune',
+      defaultPath: defaultGenerationExportFilename(generationId),
+      filters: [{ name: 'myTunes tune archive', extensions: ['tune'] }],
+    };
+    const result = win
+      ? await dialog.showSaveDialog(win, saveOpts)
+      : await dialog.showSaveDialog(saveOpts);
+    if (result.canceled || !result.filePath) {
+      return { canceled: true as const };
+    }
+    let dest = result.filePath;
+    if (!dest.toLowerCase().endsWith('.tune')) {
+      dest = `${dest}.tune`;
+    }
+    const exported = await exportTuneGeneration(generationId, dest);
+    return { canceled: false as const, ...exported };
+  });
   handle('mytunes:revealInFolder', (_e, filePath) => {
     const p = String(filePath ?? '');
     if (!p) throw new Error('No path to reveal');
@@ -532,6 +570,48 @@ export function registerIpcHandlers(): void {
     return song;
   });
   handle('mytunes:songs:delete', (_e, id) => deleteSong(String(id)));
+
+  handle('mytunes:songs:exportTune', async (event, songIdRaw) => {
+    const songId = String(songIdRaw ?? '');
+    const song = loadSong(songId);
+    if (!song) throw new Error('Song not found — save the song before exporting');
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const saveOpts = {
+      title: 'Export .tune archive',
+      defaultPath: defaultExportFilename(song),
+      filters: [{ name: 'myTunes tune archive', extensions: ['tune'] }],
+    };
+    const result = win
+      ? await dialog.showSaveDialog(win, saveOpts)
+      : await dialog.showSaveDialog(saveOpts);
+    if (result.canceled || !result.filePath) {
+      return { canceled: true as const };
+    }
+    let dest = result.filePath;
+    if (!dest.toLowerCase().endsWith('.tune')) {
+      dest = `${dest}.tune`;
+    }
+    const exported = await exportTune(songId, dest);
+    return { canceled: false as const, ...exported };
+  });
+
+  handle('mytunes:songs:importTune', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const openOpts = {
+      title: 'Load .tune archive',
+      properties: ['openFile' as const],
+      filters: [{ name: 'myTunes tune archive', extensions: ['tune'] }],
+    };
+    const result = win
+      ? await dialog.showOpenDialog(win, openOpts)
+      : await dialog.showOpenDialog(openOpts);
+    if (result.canceled || !result.filePaths[0]) {
+      return { canceled: true as const };
+    }
+    const imported = await importTune(result.filePaths[0]);
+    setSession({ lastSongId: imported.song.id });
+    return { canceled: false as const, ...imported };
+  });
 
   handle('mytunes:presets:list', () => listPresets());
   handle('mytunes:presets:save', (_e, presetRaw) => {

@@ -15,8 +15,24 @@
                 @click="onSave"
               />
               <q-btn flat dense color="grey-5" label="Save as…" :disable="saving" @click="onSaveAs" />
+              <q-btn
+                flat
+                dense
+                color="grey-5"
+                label="Export .tune…"
+                :disable="saving || exportingTune"
+                :loading="exportingTune"
+                @click="onExportTune"
+              />
               <q-btn-dropdown flat dense color="grey-4" label="Open">
                 <q-list dense dark style="min-width: 220px">
+                  <q-item clickable v-close-popup :disable="importingTune" @click="onImportTune">
+                    <q-item-section>
+                      <q-item-label>Load .tune…</q-item-label>
+                      <q-item-label caption>Import archive into library</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                  <q-separator dark />
                   <q-item v-if="!songs.length">
                     <q-item-section>No saved songs</q-item-section>
                   </q-item>
@@ -152,6 +168,8 @@ const { musicReady, backend } = storeToRefs(budgetStore);
 const { songs, activeSong, generating, isDirty } = storeToRefs(libraryStore);
 
 const saving = ref(false);
+const exportingTune = ref(false);
+const importingTune = ref(false);
 const lyriaModels = ref<LyriaModelInfo[]>(fallbackLyriaModels(null));
 const lyriaModelsLoading = ref(false);
 const selectedLyriaModel = ref(DEFAULT_LYRIA_CLIP_MODEL);
@@ -317,6 +335,51 @@ async function onOpen(id: string) {
     $q.notify({ type: 'positive', message: `Opened ${song.name}` });
   } catch (e) {
     $q.notify({ type: 'negative', message: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+async function onExportTune() {
+  exportingTune.value = true;
+  try {
+    const result = await libraryStore.exportTune();
+    if (!result) return;
+    $q.notify({
+      type: 'positive',
+      message: `Exported .tune (${result.generationCount} take${result.generationCount === 1 ? '' : 's'})`,
+    });
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e instanceof Error ? e.message : String(e) });
+  } finally {
+    exportingTune.value = false;
+  }
+}
+
+async function onImportTune() {
+  if (isDirty.value) {
+    $q.dialog({
+      title: 'Discard unsaved changes?',
+      message: 'Load a .tune archive without saving the current song?',
+      cancel: true,
+      persistent: true,
+      ok: { label: 'Load .tune', color: 'primary' },
+    }).onOk(() => {
+      void runImportTune();
+    });
+    return;
+  }
+  await runImportTune();
+}
+
+async function runImportTune() {
+  importingTune.value = true;
+  try {
+    const song = await libraryStore.importTune();
+    if (!song) return;
+    $q.notify({ type: 'positive', message: `Loaded ${song.name}` });
+  } catch (e) {
+    $q.notify({ type: 'negative', message: e instanceof Error ? e.message : String(e) });
+  } finally {
+    importingTune.value = false;
   }
 }
 

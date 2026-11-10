@@ -272,6 +272,39 @@ export const useLibraryStore = defineStore('library', () => {
     return true;
   }
 
+  async function exportTune(): Promise<{ path: string; generationCount: number } | null> {
+    if (!window.mytunes) throw new Error('Electron bridge unavailable');
+    if (isDirty.value || !activeSong.value) {
+      await saveSong();
+    }
+    const songId = activeSong.value?.id;
+    if (!songId) throw new Error('Save the song before exporting a .tune archive');
+    const result = await window.mytunes.exportTune(songId);
+    if (result.canceled) return null;
+    await window.mytunes.revealInFolder(result.path);
+    return { path: result.path, generationCount: result.generationCount };
+  }
+
+  /** Export one history take (pattern snapshot + that take’s audio) as .tune. */
+  async function exportTuneGeneration(
+    generationId: string,
+  ): Promise<{ path: string; generationCount: number } | null> {
+    if (!window.mytunes) throw new Error('Electron bridge unavailable');
+    const result = await window.mytunes.exportTuneGeneration(generationId);
+    if (result.canceled) return null;
+    await window.mytunes.revealInFolder(result.path);
+    return { path: result.path, generationCount: result.generationCount };
+  }
+
+  async function importTune(): Promise<Song | null> {
+    if (!window.mytunes) throw new Error('Electron bridge unavailable');
+    const result = await window.mytunes.importTune();
+    if (result.canceled) return null;
+    await applySong(result.song);
+    await refreshSongs();
+    return result.song;
+  }
+
   return {
     generations,
     songGenerations,
@@ -293,6 +326,9 @@ export const useLibraryStore = defineStore('library', () => {
     forkFromGeneration,
     generateMusic,
     restoreSession,
+    exportTune,
+    exportTuneGeneration,
+    importTune,
     markClean,
   };
 });

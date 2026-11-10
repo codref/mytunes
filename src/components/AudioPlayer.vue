@@ -18,20 +18,42 @@
         style="height: 36px"
       />
       <div class="row q-gutter-sm items-center q-mt-sm">
-        <q-btn
+        <q-btn-dropdown
+          split
           unelevated
           dense
           color="primary"
-          icon="movie"
-          label="Export video"
+          text-color="dark"
+          icon="archive"
+          label="Export .tune"
+          content-class="bg-dark"
           :loading="exportingId === currentGeneration.id"
-          :disable="Boolean(exportingId)"
-          @click="onExport(currentGeneration)"
+          :disable="Boolean(exportingId) && exportingId !== currentGeneration.id"
+          @click="onExportTune(currentGeneration)"
         >
-          <q-tooltip>Waveform MP4 + sidecar SRT</q-tooltip>
-        </q-btn>
+          <q-list dense dark style="min-width: 200px">
+            <q-item clickable v-close-popup @click="onExportTune(currentGeneration)">
+              <q-item-section avatar>
+                <q-icon name="archive" color="primary" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>Export .tune</q-item-label>
+                <q-item-label caption>This take’s source + audio</q-item-label>
+              </q-item-section>
+            </q-item>
+            <q-item clickable v-close-popup @click="onExportVideo(currentGeneration)">
+              <q-item-section avatar>
+                <q-icon name="movie" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>Export video</q-item-label>
+                <q-item-label caption>Waveform MP4 + SRT</q-item-label>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-btn-dropdown>
         <span v-if="exportingId === currentGeneration.id" class="text-caption text-grey-5">
-          {{ exportStatus || 'Rendering waveform…' }}
+          {{ exportStatus || 'Exporting…' }}
         </span>
       </div>
       <div
@@ -39,8 +61,8 @@
         class="text-caption text-grey-5 q-mt-xs"
       >
         Exported
-        <span class="text-grey-4">{{ basename(lastExport.mp4Path) }}</span>
-        + SRT
+        <span class="text-grey-4">{{ basename(lastExport.path) }}</span>
+        <span v-if="lastExport.kind === 'video'"> + SRT</span>
         <q-btn
           flat
           dense
@@ -48,7 +70,7 @@
           color="primary"
           label="Reveal"
           class="q-ml-xs"
-          @click="onReveal(lastExport.mp4Path)"
+          @click="onReveal(lastExport.path)"
         />
       </div>
       <div v-if="recallWarning" class="text-caption text-amber-6 q-mt-xs">{{ recallWarning }}</div>
@@ -155,30 +177,51 @@
               >
                 <q-tooltip>New song thread from this take’s knobs, lyrics, and audio</q-tooltip>
               </q-btn>
-              <q-btn
+              <q-btn-dropdown
+                split
                 outline
                 dense
                 color="primary"
-                icon="movie"
-                label="Export"
+                icon="archive"
+                label="Export .tune"
+                content-class="bg-dark"
                 :loading="exportingId === g.id"
                 :disable="Boolean(exportingId) && exportingId !== g.id"
-                @click="onExport(g)"
+                @click="onExportTune(g)"
               >
-                <q-tooltip>Waveform MP4 + sidecar SRT</q-tooltip>
-              </q-btn>
+                <q-list dense dark style="min-width: 200px">
+                  <q-item clickable v-close-popup @click="onExportTune(g)">
+                    <q-item-section avatar>
+                      <q-icon name="archive" color="primary" />
+                    </q-item-section>
+                    <q-item-section>
+                      <q-item-label>Export .tune</q-item-label>
+                      <q-item-label caption>This take’s source + audio</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup @click="onExportVideo(g)">
+                    <q-item-section avatar>
+                      <q-icon name="movie" />
+                    </q-item-section>
+                    <q-item-section>
+                      <q-item-label>Export video</q-item-label>
+                      <q-item-label caption>Waveform MP4 + SRT</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                </q-list>
+              </q-btn-dropdown>
             </div>
             <div
               v-if="exportingId === g.id"
               class="text-caption text-grey-5 q-mt-xs"
             >
-              {{ exportStatus || 'Rendering waveform…' }}
+              {{ exportStatus || 'Exporting…' }}
             </div>
             <div
               v-if="lastExport && lastExport.generationId === g.id"
               class="text-caption text-grey-5 q-mt-xs"
             >
-              Exported {{ basename(lastExport.mp4Path) }}
+              Exported {{ basename(lastExport.path) }}
               <q-btn
                 flat
                 dense
@@ -186,14 +229,15 @@
                 color="primary"
                 label="Reveal"
                 class="q-ml-xs"
-                @click="onReveal(lastExport.mp4Path)"
+                @click="onReveal(lastExport.path)"
               />
             </div>
           </div>
         </div>
       </div>
       <div class="text-caption text-grey-6 q-mt-xs">
-        Expand to preview and annotate. Restore loads the studio; Fork starts a new song thread.
+        Expand to preview and annotate. Restore loads the studio; Fork starts a new song
+        thread. Export .tune packs that take’s knobs + audio (dropdown → video).
       </div>
     </div>
   </div>
@@ -213,9 +257,11 @@ const recallingId = ref<string | null>(null);
 const forkingId = ref<string | null>(null);
 const exportingId = ref<string | null>(null);
 const exportStatus = ref('');
-const lastExport = ref<{ generationId: string; mp4Path: string; srtPath: string } | null>(
-  null,
-);
+const lastExport = ref<{
+  generationId: string;
+  kind: 'tune' | 'video';
+  path: string;
+} | null>(null);
 const savingNotesId = ref<string | null>(null);
 const expandedId = ref<string | null>(null);
 const draftNotes = reactive<Record<string, string>>({});
@@ -349,16 +395,54 @@ function onFork(g: GenerationRecord): void {
   });
 }
 
-async function onExport(g: GenerationRecord): Promise<void> {
+async function onExportTune(g: GenerationRecord): Promise<void> {
+  if (exportingId.value) return;
+  exportingId.value = g.id;
+  exportStatus.value = 'Packing .tune…';
+  try {
+    const result = await library.exportTuneGeneration(g.id);
+    if (!result) return;
+    lastExport.value = {
+      generationId: g.id,
+      kind: 'tune',
+      path: result.path,
+    };
+    $q.notify({
+      type: 'positive',
+      message: 'Exported take as .tune',
+      timeout: 2800,
+      actions: [
+        {
+          label: 'Reveal',
+          color: 'white',
+          handler: () => {
+            void onReveal(result.path);
+          },
+        },
+      ],
+    });
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: e instanceof Error ? e.message : String(e),
+      timeout: 5000,
+    });
+  } finally {
+    exportingId.value = null;
+    exportStatus.value = '';
+  }
+}
+
+async function onExportVideo(g: GenerationRecord): Promise<void> {
   if (exportingId.value || !window.mytunes) return;
   exportingId.value = g.id;
-  exportStatus.value = 'Preparing export…';
+  exportStatus.value = 'Preparing video…';
   try {
     const result = await window.mytunes.exportVideo(g.id);
     lastExport.value = {
       generationId: g.id,
-      mp4Path: result.mp4Path,
-      srtPath: result.srtPath,
+      kind: 'video',
+      path: result.mp4Path,
     };
     const cuesNote =
       result.cueCount > 0 ? ` · ${result.cueCount} captions` : ' · no captions';
