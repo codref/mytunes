@@ -143,7 +143,12 @@ Return only the revised lyrics with section tags.`,
   };
 }
 
-export async function hashPromptNode(compiledPrompt: string, mode: string): Promise<string> {
+export async function hashPromptNode(
+  compiledPrompt: string,
+  mode: string,
+  model?: string,
+): Promise<string> {
   const { createHash } = await import('node:crypto');
-  return createHash('sha256').update(`${mode}::${compiledPrompt}`).digest('hex');
+  const modelPart = model?.trim() ? `::${model.trim()}` : '';
+  return createHash('sha256').update(`${mode}${modelPart}::${compiledPrompt}`).digest('hex');
 }

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { app } from 'electron';
 import {
   createDefaultSettings,
+  migrateSettingsRaw,
   type AppSettings,
   type AppSettingsPublic,
   type AppSettingsUpdate,
@@ -27,13 +28,14 @@ export function loadSettings(): AppSettings {
     return cached;
   }
   try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<AppSettings>;
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    const migrated = migrateSettingsRaw(raw);
     cached = {
       ...createDefaultSettings(),
-      ...raw,
+      ...migrated,
       patternDefaults: {
         ...createDefaultSettings().patternDefaults,
-        ...(raw.patternDefaults ?? {}),
+        ...((migrated.patternDefaults as AppSettings['patternDefaults']) ?? {}),
       },
     };
   } catch {
@@ -52,9 +54,10 @@ export function updateSettings(update: AppSettingsUpdate): AppSettings {
   const current = loadSettings();
   const next: AppSettings = {
     ...current,
-    ...(update.backendPreference !== undefined
-      ? { backendPreference: update.backendPreference }
+    ...(update.assistantBackend !== undefined
+      ? { assistantBackend: update.assistantBackend }
       : {}),
+    ...(update.musicBackend !== undefined ? { musicBackend: update.musicBackend } : {}),
     ...(update.vertexProject !== undefined ? { vertexProject: update.vertexProject || null } : {}),
     ...(update.vertexLocation !== undefined
       ? { vertexLocation: update.vertexLocation.trim() || 'global' }
@@ -64,6 +67,12 @@ export function updateSettings(update: AppSettingsUpdate): AppSettings {
       : {}),
     ...(update.flashModel !== undefined
       ? { flashModel: update.flashModel.trim() || current.flashModel }
+      : {}),
+    ...(update.lyriaClipModel !== undefined
+      ? { lyriaClipModel: update.lyriaClipModel.trim() || current.lyriaClipModel }
+      : {}),
+    ...(update.lyriaFullModel !== undefined
+      ? { lyriaFullModel: update.lyriaFullModel.trim() || current.lyriaFullModel }
       : {}),
     ...(update.patternDefaults !== undefined
       ? { patternDefaults: { ...update.patternDefaults } }
@@ -80,19 +89,30 @@ export function updateSettings(update: AppSettingsUpdate): AppSettings {
 
 export function toPublicSettings(settings: AppSettings = loadSettings()): AppSettingsPublic {
   return {
-    backendPreference: settings.backendPreference,
+    assistantBackend: settings.assistantBackend,
+    musicBackend: settings.musicBackend,
     hasApiKey: Boolean(settings.apiKey),
     apiKeyMasked: settings.apiKey ? maskKey(settings.apiKey) : null,
     vertexProject: settings.vertexProject,
     vertexLocation: settings.vertexLocation,
     credentialsPath: settings.credentialsPath,
     flashModel: settings.flashModel,
+    lyriaClipModel: settings.lyriaClipModel,
+    lyriaFullModel: settings.lyriaFullModel,
     patternDefaults: { ...settings.patternDefaults },
   };
 }
 
 export function getFlashModel(): string {
   return loadSettings().flashModel;
+}
+
+export function getLyriaClipModel(): string {
+  return loadSettings().lyriaClipModel;
+}
+
+export function getLyriaFullModel(): string {
+  return loadSettings().lyriaFullModel;
 }
 
 export function getPatternDefaults() {

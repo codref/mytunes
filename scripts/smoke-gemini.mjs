@@ -218,7 +218,11 @@ if (mode === 'vertex') {
   if (flags.location) {
     console.warn('NOTE: --location is ignored for Gemini Developer API backend');
   }
-  ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: 600_000 } });
+  // @google/genai 3.x defaults to v1; Lyria models are v1beta-only.
+  ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: { apiVersion: 'v1beta', timeout: 600_000 },
+  });
 }
 
 console.log(

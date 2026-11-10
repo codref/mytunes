@@ -6,34 +6,50 @@ import {
   parseTranscriptFlashJson,
   shouldUseFlashTranscriptParse,
 } from '../../src/models/lyriaTranscript';
+import {
+  DEFAULT_LYRIA_CLIP_MODEL,
+  DEFAULT_LYRIA_FULL_MODEL_GEMINI_API,
+  DEFAULT_LYRIA_FULL_MODEL_VERTEX,
+  defaultLyriaFullModel,
+} from '../../src/models/lyriaModels';
+import type { AiPurpose } from '../../src/models/settings';
 import { DEFAULT_FLASH_MODEL } from '../../src/models/settings';
 import { resolveAiBackend, type AiBackend, type AiBackendConfig } from './env';
-import { getFlashModel } from './settingsStore';
+import { getFlashModel, getLyriaClipModel, getLyriaFullModel } from './settingsStore';
 
 /** Flash for lyrics / prompt refine (both backends). Vertex: use global location. */
 export const FLASH_MODEL = DEFAULT_FLASH_MODEL;
 
 /** Vertex + Developer API share Clip id. */
-export const LYRIA_CLIP_MODEL = 'lyria-3-clip-preview';
+export const LYRIA_CLIP_MODEL = DEFAULT_LYRIA_CLIP_MODEL;
 
 /** Full song: Vertex uses Pro Preview; Gemini Developer API uses Lyria 3.5. */
-export const LYRIA_FULL_MODEL_VERTEX = 'lyria-3-pro-preview';
-export const LYRIA_FULL_MODEL_GEMINI_API = 'lyria-3.5';
+export const LYRIA_FULL_MODEL_VERTEX = DEFAULT_LYRIA_FULL_MODEL_VERTEX;
+export const LYRIA_FULL_MODEL_GEMINI_API = DEFAULT_LYRIA_FULL_MODEL_GEMINI_API;
 
 export class KeyMissingError extends Error {
   code = 'KEY_MISSING' as const;
-  constructor() {
+  constructor(purpose?: AiPurpose) {
+    const which =
+      purpose === 'music'
+        ? 'music generation backend'
+        : purpose === 'assistant'
+          ? 'assistant backend'
+          : 'Google AI backend';
     super(
-      'No Google AI backend configured. Open Settings to add a Gemini API key or Vertex project, or set credentials in .env.local.',
+      `No ${which} configured. Open Settings to pick Vertex or Gemini API and add credentials.`,
     );
     this.name = 'KeyMissingError';
   }
 }
 
-let client: GoogleGenAI | null = null;
-let clientBackend: AiBackend | null = null;
-let clientFingerprint: string | null = null;
-let activeConfig: AiBackendConfig | null = null;
+type ClientSlot = {
+  client: GoogleGenAI;
+  fingerprint: string;
+  config: AiBackendConfig;
+};
+
+const clients: Partial<Record<AiPurpose, ClientSlot>> = {};
 
 function backendFingerprint(cfg: AiBackendConfig): string {
   return [
@@ -45,16 +61,14 @@ function backendFingerprint(cfg: AiBackendConfig): string {
   ].join('|');
 }
 
-export function getActiveBackend(): AiBackendConfig | null {
-  return activeConfig ?? resolveAiBackend();
+export function getActiveBackend(purpose: AiPurpose = 'assistant'): AiBackendConfig | null {
+  return clients[purpose]?.config ?? resolveAiBackend(purpose);
 }
 
-/** Drop cached client after Settings change. */
+/** Drop cached clients after Settings change. */
 export function resetAiClient(): void {
-  client = null;
-  clientBackend = null;
-  clientFingerprint = null;
-  activeConfig = null;
+  delete clients.assistant;
+  delete clients.music;
 }
 
 export function resolveFlashModel(): string {
@@ -65,23 +79,9 @@ export function resolveFlashModel(): string {
   }
 }
 
-export function getClient(): GoogleGenAI {
-  const cfg = resolveAiBackend();
-  if (!cfg) {
-    throw new KeyMissingError();
-  }
-
-  const fingerprint = backendFingerprint(cfg);
-  if (client && clientBackend === cfg.backend && clientFingerprint === fingerprint) {
-    return client;
-  }
-
-  activeConfig = cfg;
-  clientBackend = cfg.backend;
-  clientFingerprint = fingerprint;
-
+function buildClient(cfg: AiBackendConfig): GoogleGenAI {
   if (cfg.backend === 'vertex') {
-    if (!cfg.project) throw new KeyMissingError();
+    if (!cfg.project) throw new KeyMissingError(cfg.purpose);
     // User ADC often needs an explicit quota project for aiplatform.googleapis.com.
     if (!process.env.GOOGLE_CLOUD_QUOTA_PROJECT?.trim()) {
       process.env.GOOGLE_CLOUD_QUOTA_PROJECT = cfg.project;
@@ -92,7 +92,7 @@ export function getClient(): GoogleGenAI {
     if (!process.env.GOOGLE_CLOUD_PROJECT?.trim()) {
       process.env.GOOGLE_CLOUD_PROJECT = cfg.project;
     }
-    client = new GoogleGenAI({
+    return new GoogleGenAI({
       vertexai: true,
       project: cfg.project,
       location: cfg.location || 'global',
@@ -105,19 +105,53 @@ export function getClient(): GoogleGenAI {
           }
         : {}),
     });
-  } else {
-    if (!cfg.apiKey) throw new KeyMissingError();
-    client = new GoogleGenAI({
-      apiKey: cfg.apiKey,
-      httpOptions: { timeout: 600_000 },
-    });
+  }
+  if (!cfg.apiKey) throw new KeyMissingError(cfg.purpose);
+  // @google/genai 3.x defaults Gemini Developer API to v1; Lyria lives on v1beta only.
+  return new GoogleGenAI({
+    apiKey: cfg.apiKey,
+    httpOptions: { apiVersion: 'v1beta', timeout: 600_000 },
+  });
+}
+
+export function getClient(purpose: AiPurpose = 'assistant'): GoogleGenAI {
+  const cfg = resolveAiBackend(purpose);
+  if (!cfg) {
+    throw new KeyMissingError(purpose);
   }
 
+  const fingerprint = backendFingerprint(cfg);
+  const cached = clients[purpose];
+  if (cached && cached.fingerprint === fingerprint) {
+    return cached.client;
+  }
+
+  const client = buildClient(cfg);
+  clients[purpose] = { client, fingerprint, config: cfg };
   return client;
 }
 
 export function lyriaFullModelFor(backend: AiBackend): string {
-  return backend === 'vertex' ? LYRIA_FULL_MODEL_VERTEX : LYRIA_FULL_MODEL_GEMINI_API;
+  return defaultLyriaFullModel(backend);
+}
+
+/** Resolve clip/full Lyria id from Settings, with backend-aware full fallback. */
+export function resolveLyriaModel(
+  mode: 'clip' | 'full',
+  opts?: { modelOverride?: string; backend?: AiBackend },
+): string {
+  const override = opts?.modelOverride?.trim();
+  if (override) return override;
+
+  const backend = opts?.backend ?? getActiveBackend('music')?.backend ?? 'gemini-api';
+  try {
+    if (mode === 'clip') {
+      return getLyriaClipModel().trim() || LYRIA_CLIP_MODEL;
+    }
+    return getLyriaFullModel().trim() || lyriaFullModelFor(backend);
+  } catch {
+    return mode === 'clip' ? LYRIA_CLIP_MODEL : lyriaFullModelFor(backend);
+  }
 }
 
 export interface FlashResult {
@@ -144,7 +178,7 @@ export async function flashGenerate(
   systemInstruction?: string,
   opts?: { temperature?: number },
 ): Promise<FlashResult> {
-  const ai = getClient();
+  const ai = getClient('assistant');
   const model = resolveFlashModel();
   const temperature = opts?.temperature ?? 0.7;
   const response = await ai.models.generateContent({
@@ -443,12 +477,16 @@ function attachLyricFidelity(
 export async function generateLyriaMusic(
   compiledPrompt: string,
   mode: 'clip' | 'full',
+  opts?: { model?: string },
 ): Promise<LyriaResult> {
-  const ai = getClient();
-  const cfg = getActiveBackend();
-  if (!cfg) throw new KeyMissingError();
+  const ai = getClient('music');
+  const cfg = getActiveBackend('music');
+  if (!cfg) throw new KeyMissingError('music');
 
-  const model = mode === 'clip' ? LYRIA_CLIP_MODEL : lyriaFullModelFor(cfg.backend);
+  const model = resolveLyriaModel(mode, {
+    ...(opts?.model ? { modelOverride: opts.model } : {}),
+    backend: cfg.backend,
+  });
   const userLyrics = extractLyricsBlock(compiledPrompt).lyrics;
   const hadLyrics = Boolean(userLyrics);
   const prompts = [

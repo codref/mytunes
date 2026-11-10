@@ -20,6 +20,8 @@ const mytunes: MytunesApi = {
   getPatternDefaults: () => ipcRenderer.invoke('mytunes:settings:patternDefaults'),
   listChatModels: (opts) =>
     ipcRenderer.invoke('mytunes:models:listChat', opts ? cloneForIpc(opts) : undefined),
+  listLyriaModels: (opts) =>
+    ipcRenderer.invoke('mytunes:models:listLyria', opts ? cloneForIpc(opts) : undefined),
   compilePrompt: (pattern) => ipcRenderer.invoke('mytunes:compilePrompt', cloneForIpc(pattern)),
   refinePrompt: (pattern) => ipcRenderer.invoke('mytunes:refinePrompt', cloneForIpc(pattern)),
   writeLyrics: (pattern) => ipcRenderer.invoke('mytunes:writeLyrics', cloneForIpc(pattern)),

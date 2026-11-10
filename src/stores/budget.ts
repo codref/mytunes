@@ -7,12 +7,26 @@ import {
   type BudgetState,
 } from '@/models/budget';
 import type { LyriaMode } from '@/models/pattern';
+import type { PurposeBackendStatus } from '@/models/api';
 
 export const useBudgetStore = defineStore('budget', () => {
   const state = ref<BudgetState>(createDefaultBudget());
-  const keyPresent = ref(false);
-  const keyMasked = ref<string | null>(null);
-  const backend = ref<'vertex' | 'gemini-api' | null>(null);
+  const assistant = ref<PurposeBackendStatus>({
+    present: false,
+    backend: null,
+    label: null,
+  });
+  const music = ref<PurposeBackendStatus>({
+    present: false,
+    backend: null,
+    label: null,
+  });
+  const vertexConfigured = ref(false);
+  const geminiConfigured = ref(false);
+
+  const keyPresent = computed(() => music.value.present || assistant.value.present);
+  const musicReady = computed(() => music.value.present);
+  const assistantReady = computed(() => assistant.value.present);
 
   const sessionPct = computed(() =>
     state.value.sessionLimitUsd
@@ -26,6 +40,21 @@ export const useBudgetStore = defineStore('budget', () => {
       : 0,
   );
 
+  const vertexSessionPct = computed(() =>
+    state.value.sessionLimitUsd
+      ? Math.min(100, (state.value.vertex.sessionSpentUsd / state.value.sessionLimitUsd) * 100)
+      : 0,
+  );
+
+  const geminiSessionPct = computed(() =>
+    state.value.sessionLimitUsd
+      ? Math.min(100, (state.value.geminiApi.sessionSpentUsd / state.value.sessionLimitUsd) * 100)
+      : 0,
+  );
+
+  /** Active music backend id — for Lyria model fallbacks. */
+  const backend = computed(() => music.value.backend);
+
   function applyBudget(next: BudgetState) {
     state.value = next;
   }
@@ -36,10 +65,16 @@ export const useBudgetStore = defineStore('budget', () => {
       window.mytunes.getBudget(),
       window.mytunes.getKeyStatus(),
     ]);
-    state.value = budget;
-    keyPresent.value = key.present;
-    keyMasked.value = key.masked;
-    backend.value = key.backend;
+    state.value = {
+      ...createDefaultBudget(),
+      ...budget,
+      vertex: { ...createDefaultBudget().vertex, ...(budget.vertex ?? {}) },
+      geminiApi: { ...createDefaultBudget().geminiApi, ...(budget.geminiApi ?? {}) },
+    };
+    assistant.value = key.assistant;
+    music.value = key.music;
+    vertexConfigured.value = key.vertexConfigured;
+    geminiConfigured.value = key.geminiConfigured;
   }
 
   async function setLimits(sessionLimitUsd: number, dayLimitUsd: number) {
@@ -57,11 +92,18 @@ export const useBudgetStore = defineStore('budget', () => {
 
   return {
     state,
+    assistant,
+    music,
     keyPresent,
-    keyMasked,
+    musicReady,
+    assistantReady,
+    vertexConfigured,
+    geminiConfigured,
     backend,
     sessionPct,
     dayPct,
+    vertexSessionPct,
+    geminiSessionPct,
     applyBudget,
     refresh,
     setLimits,

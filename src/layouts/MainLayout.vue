@@ -1,7 +1,7 @@
 <template>
   <q-layout view="hHh LpR lFf" class="bg-transparent">
     <q-header elevated class="mt-header">
-      <q-toolbar>
+      <q-toolbar class="mt-toolbar">
         <div class="mt-brand q-mr-lg">myTunes</div>
         <div class="mt-song-meta row items-center no-wrap q-mr-md">
           <div class="mt-song-meta__text ellipsis">
@@ -14,7 +14,7 @@
           </q-btn>
         </div>
         <q-space />
-        <BudgetBar class="gt-xs" />
+        <BudgetBar />
         <q-btn flat dense icon="tune" class="q-ml-sm" @click="ui.openSettings()">
           <q-tooltip>Settings</q-tooltip>
         </q-btn>
@@ -29,9 +29,6 @@
           <q-tooltip>Assistant</q-tooltip>
         </q-btn>
       </q-toolbar>
-      <div class="q-px-md q-pb-sm lt-sm">
-        <BudgetBar />
-      </div>
     </q-header>
 
     <AssistantDrawer />
@@ -103,6 +100,12 @@ function onRename() {
 .mt-header {
   background: linear-gradient(180deg, rgba(36, 31, 25, 0.98), rgba(26, 22, 18, 0.95));
   border-bottom: 1px solid var(--mt-line);
+}
+
+.mt-toolbar {
+  min-height: 48px;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 
 .mt-song-meta {

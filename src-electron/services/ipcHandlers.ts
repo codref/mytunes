@@ -34,11 +34,13 @@ import {
 import type { GenerationRecord } from '../../src/models/generation';
 import {
   generateLyriaMusic,
+  getActiveBackend,
   KeyMissingError,
   resetAiClient,
+  resolveLyriaModel,
   splitLyriaTranscriptWithFlash,
 } from './geminiClient';
-import { listChatModels } from './modelCatalog';
+import { listChatModels, listLyriaModels } from './modelCatalog';
 import { exportGenerationVideo } from './videoExport';
 import { scoreLyricOverlap } from '../../src/models/compilePrompt';
 import {
@@ -94,6 +96,7 @@ const channels = [
   'mytunes:settings:set',
   'mytunes:settings:patternDefaults',
   'mytunes:models:listChat',
+  'mytunes:models:listLyria',
   'mytunes:compilePrompt',
   'mytunes:refinePrompt',
   'mytunes:writeLyrics',
@@ -130,6 +133,13 @@ const channels = [
 ] as const;
 
 const abortControllers = new Map<string, AbortController>();
+
+function ledgerBackend(
+  purpose: 'assistant' | 'music',
+): { backend: 'vertex' | 'gemini-api' } | Record<string, never> {
+  const backend = getActiveBackend(purpose)?.backend;
+  return backend ? { backend } : {};
+}
 
 function emitAssistant(event: IpcMainInvokeEvent, payload: AssistantEvent): void {
   event.sender.send('mytunes:assistant:event', ipcSafe(payload));
@@ -173,6 +183,11 @@ export function registerIpcHandlers(): void {
     return listChatModels({ force: Boolean(opts.force) });
   });
 
+  handle('mytunes:models:listLyria', async (_e, optsRaw) => {
+    const opts = (optsRaw ?? {}) as { force?: boolean };
+    return listLyriaModels({ force: Boolean(opts.force) });
+  });
+
   handle('mytunes:compilePrompt', (_e, pattern) => {
     const compiledPrompt = compileLocal(pattern as Pattern);
     return { compiledPrompt };
@@ -193,6 +208,7 @@ export function registerIpcHandlers(): void {
         patternId: pattern.id,
         ok: true,
         note: 'refinePrompt',
+        ...ledgerBackend('assistant'),
       });
       return {
         compiledPrompt: result.compiledPrompt,
@@ -208,6 +224,7 @@ export function registerIpcHandlers(): void {
         patternId: pattern.id,
         ok: false,
         note: errMessage(error),
+        ...ledgerBackend('assistant'),
       });
       throw error;
     }
@@ -228,6 +245,7 @@ export function registerIpcHandlers(): void {
         patternId: pattern.id,
         ok: true,
         note: 'writeLyrics',
+        ...ledgerBackend('assistant'),
       });
       return {
         lyrics: result.lyrics,
@@ -243,6 +261,7 @@ export function registerIpcHandlers(): void {
         patternId: pattern.id,
         ok: false,
         note: errMessage(error),
+        ...ledgerBackend('assistant'),
       });
       throw error;
     }
@@ -263,6 +282,7 @@ export function registerIpcHandlers(): void {
         patternId: pattern.id,
         ok: true,
         note: 'fixLyrics',
+        ...ledgerBackend('assistant'),
       });
       return {
         lyrics: result.lyrics,
@@ -278,6 +298,7 @@ export function registerIpcHandlers(): void {
         patternId: pattern.id,
         ok: false,
         note: errMessage(error),
+        ...ledgerBackend('assistant'),
       });
       throw error;
     }
@@ -321,6 +342,7 @@ export function registerIpcHandlers(): void {
         ok: true,
         note: split.usedFlash ? 'splitLyriaTranscript' : 'splitLyriaTranscript:heuristic',
         ...(existing?.patternId ? { patternId: existing.patternId } : {}),
+        ...ledgerBackend('assistant'),
       });
 
       return {
@@ -340,6 +362,7 @@ export function registerIpcHandlers(): void {
         ok: false,
         note: errMessage(error),
         ...(existing?.patternId ? { patternId: existing.patternId } : {}),
+        ...ledgerBackend('assistant'),
       });
       throw error;
     }
@@ -350,12 +373,16 @@ export function registerIpcHandlers(): void {
       pattern: Pattern;
       compiledPrompt: string;
       mode: 'clip' | 'full';
+      model?: string;
       songId?: string | null;
       force?: boolean;
     };
     const { pattern, compiledPrompt, mode, force } = payload;
+    const model = resolveLyriaModel(mode, {
+      ...(payload.model ? { modelOverride: payload.model } : {}),
+    });
     const cost = estimateMusicCost(mode);
-    const promptHash = await hashPromptNode(compiledPrompt, mode);
+    const promptHash = await hashPromptNode(compiledPrompt, mode, model);
 
     let song = ensureSongForPattern(pattern, payload.songId);
 
@@ -382,6 +409,7 @@ export function registerIpcHandlers(): void {
         promptHash,
         ok: false,
         note: 'hard budget',
+        ...ledgerBackend('music'),
       });
       throw new Error(
         `Budget hard limit would be exceeded (next ${mode} costs $${cost.toFixed(2)}).`,
@@ -389,7 +417,7 @@ export function registerIpcHandlers(): void {
     }
 
     try {
-      const lyria = await generateLyriaMusic(compiledPrompt, mode);
+      const lyria = await generateLyriaMusic(compiledPrompt, mode, { model });
       const generation = saveGeneration({
         songId: song.id,
         pattern,
@@ -419,6 +447,7 @@ export function registerIpcHandlers(): void {
         patternId: pattern.id,
         promptHash,
         ok: true,
+        ...ledgerBackend('music'),
       });
       if (lyria.flashParseCostUsd && lyria.flashParseCostUsd > 0) {
         budget = appendLedger({
@@ -429,6 +458,7 @@ export function registerIpcHandlers(): void {
           promptHash,
           ok: true,
           note: 'splitLyriaTranscript',
+          ...ledgerBackend('assistant'),
         });
       }
       return {
@@ -447,6 +477,7 @@ export function registerIpcHandlers(): void {
         promptHash,
         ok: false,
         note: errMessage(error),
+        ...ledgerBackend('music'),
       });
       throw error;
     }
@@ -560,6 +591,7 @@ export function registerIpcHandlers(): void {
         patternId: request.pattern.id,
         ok: true,
         note: 'assistantChat',
+        ...ledgerBackend('assistant'),
       });
 
       emitAssistant(event, {
@@ -601,6 +633,7 @@ export function registerIpcHandlers(): void {
         patternId: request.pattern.id,
         ok: false,
         note: errMessage(error),
+        ...ledgerBackend('assistant'),
       });
       emitAssistant(event, {
         type: 'error',

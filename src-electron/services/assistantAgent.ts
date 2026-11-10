@@ -737,7 +737,7 @@ function usageFromResponse(usageMeta: {
 }
 
 export async function runAssistantTurn(input: AssistantTurnInput): Promise<AssistantTurnResult> {
-  const ai = getClient();
+  const ai = getClient('assistant');
   const model = (input.model?.trim() || resolveFlashModel()).trim();
   const patches: AssistantPatch[] = [];
   let costUsd = 0;

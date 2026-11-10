@@ -239,6 +239,7 @@ export const useLibraryStore = defineStore('library', () => {
     pattern: Pattern;
     compiledPrompt: string;
     mode: 'clip' | 'full';
+    model?: string;
     force?: boolean;
   }) {
     if (!window.mytunes) throw new Error('Electron bridge unavailable');

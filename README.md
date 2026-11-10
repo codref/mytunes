@@ -148,12 +148,18 @@ Use it to brainstorm arrangement changes without hand-editing every field. Flash
 
 ## Google backends (both supported)
 
-| Backend | When used | Auth | Full-song model |
-|---------|-----------|------|-----------------|
-| **Vertex AI** (preferred if project set) | `GOOGLE_CLOUD_PROJECT` set | ADC or `GOOGLE_APPLICATION_CREDENTIALS` | `lyria-3-pro-preview` |
-| **Gemini Developer API** | `GOOGLE_API_KEY` and no Vertex project (or `GOOGLE_GENAI_USE_GEMINI_API=true`) | API key | `lyria-3.5` |
+| Backend | Auth | Typical use |
+|---------|------|-------------|
+| **Vertex AI** | ADC or `GOOGLE_APPLICATION_CREDENTIALS` + project | Larger GCP credits |
+| **Gemini Developer API** | API key (AI Studio prepaid) | Smaller prepaid balance |
 
-Clip model on both: `lyria-3-clip-preview` (~$0.04). Full song ~$0.08.
+**Settings** has separate tabs:
+
+- **Accounts** — shared API key + Vertex project/location
+- **Assistant** — Vertex *or* Gemini API for Flash (chat, lyrics, refine)
+- **Music** — Vertex *or* Gemini API for Lyria (+ clip/full model picks)
+
+Header cost tracking shows **two spend bars** (Vertex vs Gemini API). Default full models: Vertex `lyria-3-pro-preview`, Gemini API `lyria-3.5`. Clip: `lyria-3-clip-preview` (~$0.04). Full ~$0.08.
 
 ### Vertex setup (Cloud Console)
 

@@ -6,25 +6,34 @@ import type {
 } from './assistant';
 import type { BudgetState } from './budget';
 import type { ListChatModelsResult } from './chatModels';
+import type { ListLyriaModelsResult } from './lyriaModels';
 import type { GenerationRecord } from './generation';
 import type { Pattern } from './pattern';
 import type { StudioPreset } from './presets';
 import type { AppSettingsPublic, AppSettingsUpdate, PatternDefaults } from './settings';
 import type { AppSession, Song } from './song';
 
+export interface PurposeBackendStatus {
+  present: boolean;
+  backend: 'vertex' | 'gemini-api' | null;
+  label: string | null;
+}
+
 export interface MytunesApi {
   getKeyStatus: () => Promise<{
     present: boolean;
-    backend: 'vertex' | 'gemini-api' | null;
-    masked: string | null;
-    project: string | null;
-    location: string | null;
+    assistant: PurposeBackendStatus;
+    music: PurposeBackendStatus;
+    vertexConfigured: boolean;
+    geminiConfigured: boolean;
   }>;
   getSettings: () => Promise<AppSettingsPublic>;
   setSettings: (update: AppSettingsUpdate) => Promise<AppSettingsPublic>;
   getPatternDefaults: () => Promise<PatternDefaults>;
   /** Gemini chat models for the assistant picker (disk-cached). */
   listChatModels: (opts?: { force?: boolean }) => Promise<ListChatModelsResult>;
+  /** Lyria music models for clip/full generation (disk-cached). */
+  listLyriaModels: (opts?: { force?: boolean }) => Promise<ListLyriaModelsResult>;
   compilePrompt: (pattern: Pattern) => Promise<{ compiledPrompt: string }>;
   refinePrompt: (
     pattern: Pattern,
@@ -51,6 +60,8 @@ export interface MytunesApi {
     pattern: Pattern;
     compiledPrompt: string;
     mode: 'clip' | 'full';
+    /** Override Settings Lyria model for this request */
+    model?: string;
     songId?: string | null;
     force?: boolean;
   }) => Promise<{

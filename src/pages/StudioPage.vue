@@ -49,32 +49,59 @@
               content-class="bg-dark"
               @click="onGenerate"
             >
-              <q-list dense dark style="min-width: 200px">
+              <q-list dense dark style="min-width: 280px">
+                <q-item-label header class="text-grey-5">Clip · ~30s</q-item-label>
                 <q-item
-                  v-for="opt in modeOptions"
-                  :key="opt.value"
+                  v-for="opt in clipModelOptions"
+                  :key="opt.id"
                   clickable
                   v-close-popup
-                  :active="mode === opt.value"
-                  @click="mode = opt.value"
+                  :active="mode === 'clip' && selectedLyriaModel === opt.id"
+                  @click="selectLyriaModel(opt)"
                 >
                   <q-item-section>
-                    <q-item-label>{{ opt.title }}</q-item-label>
-                    <q-item-label caption>{{ opt.caption }}</q-item-label>
+                    <q-item-label>{{ opt.displayName }}</q-item-label>
+                    <q-item-label caption>{{ opt.id }}</q-item-label>
                   </q-item-section>
                   <q-item-section side>
-                    <q-item-label class="text-primary">{{ opt.price }}</q-item-label>
+                    <q-item-label class="text-primary">${{ opt.costUsd.toFixed(2) }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+                <q-separator dark />
+                <q-item-label header class="text-grey-5">Full song</q-item-label>
+                <q-item
+                  v-for="opt in fullModelOptions"
+                  :key="opt.id"
+                  clickable
+                  v-close-popup
+                  :active="mode === 'full' && selectedLyriaModel === opt.id"
+                  @click="selectLyriaModel(opt)"
+                >
+                  <q-item-section>
+                    <q-item-label>{{ opt.displayName }}</q-item-label>
+                    <q-item-label caption>{{ opt.id }}</q-item-label>
+                  </q-item-section>
+                  <q-item-section side>
+                    <q-item-label class="text-primary">${{ opt.costUsd.toFixed(2) }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+                <q-separator dark />
+                <q-item clickable dense @click="refreshLyriaModels(true)">
+                  <q-item-section>
+                    <q-item-label class="text-grey-4">
+                      {{ lyriaModelsLoading ? 'Refreshing…' : 'Refresh Lyria models' }}
+                    </q-item-label>
                   </q-item-section>
                 </q-item>
               </q-list>
             </q-btn-dropdown>
           </div>
 
-          <q-banner v-if="!keyPresent" class="bg-red-10 text-white q-mb-md" dense>
+          <q-banner v-if="!musicReady" class="bg-red-10 text-white q-mb-md" dense>
             <div class="row items-center">
               <div class="col">
-                No backend configured. Open Settings to add a Gemini API key or Vertex project
-                (or set credentials in <code>.env.local</code>).
+                Music backend not ready. Open Settings → Music to pick Vertex or Gemini API and add
+                credentials on the Accounts tab.
               </div>
               <q-btn flat dense color="white" label="Settings" class="q-ml-sm" @click="ui.openSettings()" />
             </div>
@@ -98,11 +125,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useQuasar } from 'quasar';
 import AudioPlayer from '@/components/AudioPlayer.vue';
 import BandTabs from '@/components/BandTabs.vue';
+import {
+  DEFAULT_LYRIA_CLIP_MODEL,
+  DEFAULT_LYRIA_FULL_MODEL_GEMINI_API,
+  fallbackLyriaModels,
+  type LyriaModelInfo,
+} from '@/models/lyriaModels';
 import { useBudgetStore } from '@/stores/budget';
 import { useLibraryStore } from '@/stores/library';
 import { usePatternStore } from '@/stores/pattern';
@@ -115,36 +148,89 @@ const libraryStore = useLibraryStore();
 const ui = useUiStore();
 
 const { pattern, compiledPrompt, mode } = storeToRefs(patternStore);
-const { keyPresent } = storeToRefs(budgetStore);
+const { musicReady, backend } = storeToRefs(budgetStore);
 const { songs, activeSong, generating, isDirty } = storeToRefs(libraryStore);
 
 const saving = ref(false);
+const lyriaModels = ref<LyriaModelInfo[]>(fallbackLyriaModels(null));
+const lyriaModelsLoading = ref(false);
+const selectedLyriaModel = ref(DEFAULT_LYRIA_CLIP_MODEL);
 
 const nextCost = computed(() => budgetStore.nextCost(mode.value));
 const gate = computed(() => budgetStore.gateFor(mode.value));
 const hardBlocked = computed(() => gate.value.gate === 'hard');
 const softWarned = computed(() => gate.value.gate === 'soft');
 const generateLabel = computed(() => {
-  const title = mode.value === 'full' ? 'Full' : 'Clip';
-  return `Generate ${title} · $${nextCost.value.toFixed(2)}`;
+  const short =
+    lyriaModels.value.find((m) => m.id === selectedLyriaModel.value)?.displayName ||
+    (mode.value === 'full' ? 'Full' : 'Clip');
+  return `Generate ${short} · $${nextCost.value.toFixed(2)}`;
 });
 
-const modeOptions = computed(() => [
-  {
-    label: `Clip · $${budgetStore.nextCost('clip').toFixed(2)}`,
-    value: 'clip' as const,
-    title: 'Clip',
-    caption: '30s preview',
-    price: `$${budgetStore.nextCost('clip').toFixed(2)}`,
-  },
-  {
-    label: `Full · $${budgetStore.nextCost('full').toFixed(2)}`,
-    value: 'full' as const,
-    title: 'Full',
-    caption: 'Complete song',
-    price: `$${budgetStore.nextCost('full').toFixed(2)}`,
-  },
-]);
+const clipModelOptions = computed(() => lyriaModels.value.filter((m) => m.kind === 'clip'));
+const fullModelOptions = computed(() => lyriaModels.value.filter((m) => m.kind === 'full'));
+
+async function refreshLyriaModels(force = false): Promise<void> {
+  if (!window.mytunes) return;
+  lyriaModelsLoading.value = true;
+  try {
+    const result = await window.mytunes.listLyriaModels({ force });
+    lyriaModels.value = result.models.length
+      ? result.models
+      : fallbackLyriaModels(result.backend);
+  } catch (e) {
+    lyriaModels.value = fallbackLyriaModels(backend.value);
+    if (force) {
+      $q.notify({
+        type: 'warning',
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  } finally {
+    lyriaModelsLoading.value = false;
+  }
+}
+
+async function loadLyriaSelection(): Promise<void> {
+  if (!window.mytunes) return;
+  try {
+    const settings = await window.mytunes.getSettings();
+    const preferred =
+      mode.value === 'full'
+        ? settings.lyriaFullModel || DEFAULT_LYRIA_FULL_MODEL_GEMINI_API
+        : settings.lyriaClipModel || DEFAULT_LYRIA_CLIP_MODEL;
+    selectedLyriaModel.value = preferred;
+  } catch {
+    selectedLyriaModel.value =
+      mode.value === 'full' ? DEFAULT_LYRIA_FULL_MODEL_GEMINI_API : DEFAULT_LYRIA_CLIP_MODEL;
+  }
+}
+
+async function selectLyriaModel(opt: LyriaModelInfo): Promise<void> {
+  mode.value = opt.kind;
+  selectedLyriaModel.value = opt.id;
+  if (!window.mytunes) return;
+  try {
+    if (opt.kind === 'clip') {
+      await window.mytunes.setSettings({ lyriaClipModel: opt.id });
+    } else {
+      await window.mytunes.setSettings({ lyriaFullModel: opt.id });
+    }
+  } catch (e) {
+    $q.notify({ type: 'warning', message: e instanceof Error ? e.message : String(e) });
+  }
+}
+
+watch(mode, () => {
+  void loadLyriaSelection();
+});
+
+watch(backend, () => {
+  void (async () => {
+    await refreshLyriaModels(true);
+    await loadLyriaSelection();
+  })();
+});
 
 onMounted(async () => {
   await budgetStore.refresh();
@@ -155,6 +241,8 @@ onMounted(async () => {
   } else {
     await libraryStore.refreshSongs();
   }
+  await refreshLyriaModels(false);
+  await loadLyriaSelection();
 });
 
 function formatTime(iso: string): string {
@@ -262,6 +350,7 @@ async function onGenerate() {
           pattern: pattern.value,
           compiledPrompt: compiledPrompt.value,
           mode: mode.value,
+          model: selectedLyriaModel.value,
         });
         budgetStore.applyBudget(result.budget);
         if (result.generation.lyricsMismatch) {
