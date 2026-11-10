@@ -4,6 +4,14 @@ Desktop music studio that turns band-style knobs, lyrics, and arrangement into a
 
 **License:** [MIT](LICENSE) — free to use, modify, and redistribute, including commercially.
 
+![Studio overview](docs/screenshots/studio-overview.png)
+
+*Studio — song identity and band tabs on the left, player and version history on the right.*
+
+![Assistant drawer](docs/screenshots/assistant-drawer.png)
+
+*Assistant — chat against the live pattern while the compiled Lyria prompt stays visible.*
+
 ## Project scope
 
 **myTunes** is a local creative workstation for AI song generation. You shape a *pattern* (song identity + band slots + lyrics), the app compiles that into one Lyria prompt, and each Generate call produces a versioned take you can play, compare, fork, and export.

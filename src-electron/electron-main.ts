@@ -16,6 +16,11 @@ const platform = process.platform || os.platform();
 // and makes songs/generations look missing.
 app.setPath('userData', path.join(app.getPath('appData'), 'mytunes'));
 
+// DevTools Protocol for automated UI capture (screenshots / docs).
+if (!app.isPackaged) {
+  app.commandLine.appendSwitch('remote-debugging-port', '9222');
+}
+
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'mytunes',
